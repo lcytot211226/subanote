@@ -3,18 +3,16 @@
 import { useRef, useState, type FormEvent } from "react";
 import type { CardDTO } from "./CardForm";
 import type { TransactionDTO } from "./TransactionsClient";
+import { kindOf, type TransactionKind } from "@/lib/transactionKind";
+import { KindPicker } from "./KindPicker";
+import Dropdown from "./Dropdown";
+import DatePicker, { toDateString } from "./DatePicker";
+import { cardOptions, paymentOption } from "./dropdownOptions";
 
 type TransactionCategory = "installment" | "cash" | "credit_card";
 
 function toDateInputValue(date: string) {
   return date.slice(0, 10);
-}
-
-function toLocalDateString(d: Date) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -28,12 +26,6 @@ function withCard(t: SavedTransaction, cards: CardDTO[]): TransactionDTO {
   return { ...t, card };
 }
 
-function shiftDate(date: string, days: number) {
-  const d = new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return toLocalDateString(d);
-}
-
 export default function TransactionForm({
   type,
   cards,
@@ -41,6 +33,7 @@ export default function TransactionForm({
   onSaved,
   onAdded,
   onCancel,
+  onDelete,
 }: {
   type: "income" | "expense";
   cards: CardDTO[];
@@ -50,15 +43,18 @@ export default function TransactionForm({
   /** 新增交易成功後呼叫(表單會保持開啟,方便連續輸入多筆),帶入新建立的交易(分期會是整組每一期)。 */
   onAdded?: (transactions: TransactionDTO[]) => void;
   onCancel?: () => void;
+  /** 有帶入時在按鈕列最右邊顯示「刪除」(僅編輯既有交易時使用),確認流程由外層處理。 */
+  onDelete?: () => void;
 }) {
   const itemInputRef = useRef<HTMLInputElement>(null);
   const [date, setDate] = useState(
-    transaction ? toDateInputValue(transaction.date) : toLocalDateString(new Date())
+    transaction ? toDateInputValue(transaction.date) : toDateString(new Date())
   );
   const [category, setCategory] = useState<TransactionCategory>(
     type === "income" ? "cash" : (transaction?.category ?? "cash")
   );
   const [item, setItem] = useState(transaction?.item ?? "");
+  const [kind, setKind] = useState<TransactionKind>(transaction ? kindOf(transaction) : "other");
   const [amount, setAmount] = useState(transaction ? String(transaction.amount) : "");
   const [pointsDiscount, setPointsDiscount] = useState(
     transaction?.pointsDiscount ? String(transaction.pointsDiscount) : ""
@@ -85,6 +81,11 @@ export default function TransactionForm({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    // 自製下拉選單沒有原生 required 驗證,這裡自己擋
+    if (category !== "cash" && !cardId) {
+      setError("請選擇信用卡");
+      return;
+    }
     setSubmitting(true);
 
     if (isCreatingInstallmentGroup) {
@@ -93,6 +94,7 @@ export default function TransactionForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           item,
+          kind,
           date,
           card: cardId,
           totalAmount: Number(totalAmount),
@@ -119,6 +121,7 @@ export default function TransactionForm({
       date,
       category,
       item,
+      kind,
       amount: Number(amount),
       // 空字串 / 不適用都送 null,後端就不會存這個欄位(編輯時會移除)
       pointsDiscount: showPointsDiscount && pointsDiscount !== "" ? Number(pointsDiscount) : null,
@@ -166,68 +169,56 @@ export default function TransactionForm({
         <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
           {isCreatingInstallmentGroup ? "第一期日期" : "日期"}
         </label>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setDate((d) => shiftDate(d, -1))}
-            aria-label="前一天"
-            className="shrink-0 rounded-md border border-zinc-300 px-2 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            &lt;
-          </button>
-          <input
-            type="date"
-            required
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-          />
-          <button
-            type="button"
-            onClick={() => setDate((d) => shiftDate(d, 1))}
-            aria-label="後一天"
-            className="shrink-0 rounded-md border border-zinc-300 px-2 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            &gt;
-          </button>
-        </div>
+        <DatePicker
+          value={date}
+          onChange={setDate}
+          ariaLabel={isCreatingInstallmentGroup ? "第一期日期" : "日期"}
+          showDayShift
+        />
       </div>
 
       {type === "expense" && (
         <div>
           <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">付款方式</label>
-          <select
+          <Dropdown
+            fullWidth
+            ariaLabel="付款方式"
             value={category}
-            onChange={(e) => setCategory(e.target.value as TransactionCategory)}
+            onChange={setCategory}
+            // 分期只能整組刪除重建,編輯時鎖住;單筆交易也不能改成分期
             disabled={!!transaction && transaction.category === "installment"}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-          >
-            <option value="cash">現金</option>
-            <option value="credit_card">信用卡(單筆)</option>
-            {(!transaction || transaction.category === "installment") && <option value="installment">分期</option>}
-          </select>
+            options={[
+              paymentOption("cash", "現金"),
+              paymentOption("credit_card", "信用卡(單筆)"),
+              ...(!transaction || transaction.category === "installment"
+                ? [paymentOption("installment", "分期")]
+                : []),
+            ]}
+          />
         </div>
       )}
       {category !== "cash" ? (
         <div>
           <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">信用卡</label>
-          <select
-            required
+          <Dropdown
+            fullWidth
+            ariaLabel="信用卡"
+            placeholder="請選擇卡片"
             value={cardId}
-            onChange={(e) => setCardId(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-          >
-            <option value="" disabled>
-              請選擇卡片
-            </option>
-            {cards.map((card) => (
-              <option key={card._id} value={card._id}>
-                {card.name}
-              </option>
-            ))}
-          </select>
+            onChange={setCardId}
+            options={cardOptions(cards)}
+          />
         </div>
       ) : type==="expense" && <div></div>}
+
+      {/* 收入、支出都有分類(各自一組) */}
+      <div className="sm:col-span-3">
+        <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">分類</label>
+        <KindPicker type={type} value={kind} onChange={setKind} />
+        {transaction?.installmentGroupId && (
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">同一組分期的每一期會一起改</p>
+        )}
+      </div>
 
       <div>
         <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">項目</label>
@@ -344,6 +335,16 @@ export default function TransactionForm({
             className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
           >
             取消
+          </button>
+        )}
+        {transaction && onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={submitting}
+            className="ml-auto rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-600 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+          >
+            刪除
           </button>
         )}
       </div>

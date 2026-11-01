@@ -80,8 +80,15 @@ export default function ChangePasswordForm() {
         />
       </div>
 
+      {/* 改密碼會讓 tokenVersion +1(見 /api/auth/change-password),先告訴使用者其他裝置會被登出 */}
+      <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+        更新密碼後,其他已登入這個帳號的裝置會在 30 分鐘內自動登出,需要用新密碼重新登入;目前這台不受影響。
+      </p>
+
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      {success && <p className="text-sm text-green-600 dark:text-green-400">密碼已更新</p>}
+      {success && (
+        <p className="text-sm text-green-600 dark:text-green-400">密碼已更新,其他裝置會在 30 分鐘內自動登出</p>
+      )}
 
       <button
         type="submit"

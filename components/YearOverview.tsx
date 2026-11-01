@@ -9,6 +9,7 @@ import Modal from "./Modal";
 import MonthRangePicker, { FULL_YEAR, type MonthRange } from "./MonthRangePicker";
 import {
   ArrowDownCircleIcon,
+  ArrowPathIcon,
   ArrowUpCircleIcon,
   BanknotesIcon,
   CalendarDaysIcon,
@@ -16,7 +17,6 @@ import {
   CreditCardIcon,
   ListIcon,
   HomeIcon,
-  PiggyBankIcon,
   ScaleIcon,
   TagIcon,
   UserGroupIcon,
@@ -37,7 +37,6 @@ type YearMonth = {
   subscription: number;
   utility: number;
   customItems: number;
-  piggyBank: number;
   cards: { card: string; total: number }[];
   /** 別人分享給我、且目前勾選納入的項目,收入與支出分開合計(規則見 lib/overviewItems.ts 的 includedSharedTotals) */
   sharedIncome: number;
@@ -63,7 +62,7 @@ function money(n: number) {
 
 function sumOf(
   months: YearMonth[],
-  key: "income" | "expense" | "balance" | "cash" | "installment" | "subscription" | "utility" | "customItems" | "piggyBank" | "sharedIncome" | "sharedExpense"
+  key: "income" | "expense" | "balance" | "cash" | "installment" | "subscription" | "utility" | "customItems" | "sharedIncome" | "sharedExpense"
 ) {
   return months.reduce((total, m) => total + m[key], 0);
 }
@@ -410,14 +409,10 @@ export default function YearOverview({
           </h3>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Tile label="現金" value={money(sumOf(months, "cash"))} Icon={BanknotesIcon} />
-            <Tile
-              label="分期 / 訂閱"
-              value={`${money(sumOf(months, "installment"))} / ${money(sumOf(months, "subscription"))}`}
-              Icon={CalendarDaysIcon}
-            />
+            <Tile label="分期" value={money(sumOf(months, "installment"))} Icon={CalendarDaysIcon} />
+            <Tile label="訂閱" value={money(sumOf(months, "subscription"))} Icon={ArrowPathIcon} />
             <Tile label="房租水電" value={money(sumOf(months, "utility"))} Icon={HomeIcon} />
             <Tile label="自訂項目" value={money(sumOf(months, "customItems"))} Icon={TagIcon} />
-            <Tile label="存錢罐" value={money(sumOf(months, "piggyBank"))} Icon={PiggyBankIcon} />
             <button
               type="button"
               onClick={() => setIncludeShared((prev) => !prev)}

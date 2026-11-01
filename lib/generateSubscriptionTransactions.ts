@@ -4,6 +4,7 @@ import Card from "@/lib/models/Card";
 import { calculateBillingPeriod, toCardBillingInfo, type CardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { addMonthsClamped } from "@/lib/addMonths";
 import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
+import { DEFAULT_EXPENSE_KIND } from "@/lib/expenseKind";
 
 // 訂閱的日期(startDate/occurrence)都是從 "YYYY-MM-DD" 字串或 addMonthsClamped 算出來的 UTC 午夜,
 // 代表的其實是「當地行事曆上的哪一天」,所以這裡的「今天」也要用同樣方式表示,
@@ -51,6 +52,8 @@ export async function generateDueSubscriptionTransactions(userId: string) {
           date: occurrence,
           category: sub.category,
           item: sub.item,
+          // 沿用訂閱設定的分類(舊訂閱沒有就是「其他」)
+          kind: sub.kind ?? DEFAULT_EXPENSE_KIND,
           card: sub.category === "cash" ? null : sub.card,
           installmentInfo: null,
           amount: sub.amount,

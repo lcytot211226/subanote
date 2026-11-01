@@ -1,4 +1,5 @@
 import mongoose, { Schema, type InferSchemaType } from "mongoose";
+import { ALL_KINDS } from "../transactionKind";
 
 const TransactionSchema = new Schema(
   {
@@ -11,6 +12,11 @@ const TransactionSchema = new Schema(
       required: true,
     },
     item: { type: String, required: true },
+    /**
+     * 分類:支出用食物 / 娛樂 / 商店…(lib/expenseKind.ts),收入用薪水 / 獎金 / 轉帳 / 其他(lib/incomeKind.ts);
+     * API 會檢查分類跟 type 對得上(lib/transactionKind.ts)。同一組分期共用同一個分類。
+     */
+    kind: { type: String, enum: ALL_KINDS },
     card: { type: Schema.Types.ObjectId, ref: "Card", default: null },
     installmentInfo: {
       type: new Schema(

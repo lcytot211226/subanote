@@ -6,6 +6,7 @@ import { requireAuth } from "@/lib/auth";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { parsePointsDiscount } from "@/lib/pointsDiscount";
+import { DEFAULT_KIND, isKindFor } from "@/lib/transactionKind";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -32,7 +33,7 @@ export async function PUT(request: Request, { params }: Context) {
 
   const { id } = await params;
   const body = await request.json();
-  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount } = body;
+  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount, kind } = body;
 
   await connectToDatabase();
   const existing = await Transaction.findOne({ _id: id, user: auth.userId });
@@ -71,10 +72,20 @@ export async function PUT(request: Request, { params }: Context) {
     return NextResponse.json({ error: discount.error }, { status: 400 });
   }
 
+  // 分類:有帶就要符合這筆的收支類型;沒帶就沿用原本的值(收支類型改了、原分類對不上時改成「其他」)
+  if (kind != null && !isKindFor(finalType, kind)) {
+    return NextResponse.json({ error: "分類不正確" }, { status: 400 });
+  }
+  const finalKind = kind ?? (isKindFor(finalType, existing.kind) ? existing.kind : DEFAULT_KIND);
+  const unset: Record<string, 1> = {};
+  if (discount.value == null) unset.pointsDiscount = 1;
+  const finalGroupId = finalCategory === "installment" ? existing.installmentGroupId : null;
+
   const transaction = await Transaction.findOneAndUpdate(
     { _id: id, user: auth.userId },
     {
       type: finalType,
+      kind: finalKind,
       date: finalDate,
       category: finalCategory,
       item: item ?? existing.item,
@@ -82,14 +93,23 @@ export async function PUT(request: Request, { params }: Context) {
       installmentInfo: finalCategory === "installment" ? (installmentInfo ?? existing.installmentInfo) : null,
       amount: finalAmount,
       // 沒有折抵就把欄位整個移除,而不是存 0
-      ...(discount.value != null ? { pointsDiscount: discount.value } : { $unset: { pointsDiscount: 1 } }),
+      ...(discount.value != null ? { pointsDiscount: discount.value } : {}),
+      ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       posted: finalPosted,
       billingPeriod,
       // 改成非分期就跟原本那組分期脫鉤,避免之後誤刪到其他期數。
-      installmentGroupId: finalCategory === "installment" ? existing.installmentGroupId : null,
+      installmentGroupId: finalGroupId,
     },
     { new: true, runValidators: true }
   ).populate("card");
+
+  // 同一組分期共用同一個分類:改其中一期的分類,其他期數跟著改(其他期數的金額等欄位不動,彙總也不受影響)
+  if (finalGroupId) {
+    await Transaction.updateMany(
+      { user: auth.userId, installmentGroupId: finalGroupId, _id: { $ne: id } },
+      { kind: finalKind }
+    );
+  }
 
   await recomputeOverviewSummary(auth.userId, billingPeriod);
   if (existing.billingPeriod !== billingPeriod) {

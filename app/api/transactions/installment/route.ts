@@ -7,6 +7,7 @@ import { requireAuth } from "@/lib/auth";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { addMonthsClamped } from "@/lib/addMonths";
 import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
+import { DEFAULT_EXPENSE_KIND, isExpenseKind } from "@/lib/expenseKind";
 
 /** 建立一筆分期購買:一次生成 totalNumber 筆交易(每期一筆),共用同一個 installmentGroupId。 */
 export async function POST(request: Request) {
@@ -15,13 +16,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未登入" }, { status: 401 });
   }
 
-  const { item, date, card, totalAmount, totalNumber } = await request.json();
+  const { item, date, card, totalAmount, totalNumber, kind } = await request.json();
 
   if (!item || !date || !card || !totalAmount || !totalNumber) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
   }
   if (totalNumber < 1 || !Number.isInteger(totalNumber)) {
     return NextResponse.json({ error: "總期數必須是正整數" }, { status: 400 });
+  }
+  if (kind != null && !isExpenseKind(kind)) {
+    return NextResponse.json({ error: "分類不正確" }, { status: 400 });
   }
 
   await connectToDatabase();
@@ -50,6 +54,7 @@ export async function POST(request: Request) {
       date: periodDate,
       category: "installment" as const,
       item,
+      kind: kind ?? DEFAULT_EXPENSE_KIND,
       card,
       installmentInfo: { currentNumber: i + 1, totalNumber },
       amount,

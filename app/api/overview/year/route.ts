@@ -11,7 +11,7 @@ import { formatPeriod, includedSharedTotals, type SharedTotals } from "@/lib/ove
 
 /**
  * /overview 的年度檢視:一次回傳某年 12 個月的 OverviewSummary 快取。
- * 一次查出整年的快取;沒有快取或是缺 piggyBank 的舊快取,才逐月走 getOverviewSummary 現場算並補上,
+ * 一次查出整年的快取;沒有快取的月份才逐月走 getOverviewSummary 現場算並補上,
  * 之後同一年再看就只剩一次查詢。快取只含自己的收支;另外附上每個月別人分享給我、且目前勾選納入
  * (included)的項目收入 / 支出
  * (sharedIncome / sharedExpense,規則見 includedSharedTotals),要不要計入由前端切換。
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
   const summaries = await Promise.all(
     periods.map((period) => {
       const summary = byPeriod.get(period);
-      return summary && summary.piggyBank != null ? summary : getOverviewSummary(auth.userId, period);
+      return summary ?? getOverviewSummary(auth.userId, period);
     })
   );
 
@@ -57,7 +57,6 @@ export async function GET(request: Request) {
     subscription: s?.subscription ?? 0,
     utility: s?.utility ?? 0,
     customItems: s?.customItems ?? 0,
-    piggyBank: s?.piggyBank ?? 0,
     cards: (s?.cards ?? []).map((c) => ({ card: String(c.card), total: c.total })),
     sharedIncome: sharedByPeriod.get(periods[i])?.income ?? 0,
     sharedExpense: sharedByPeriod.get(periods[i])?.expense ?? 0,
@@ -89,7 +88,7 @@ async function getYearSharedTotals(email: string, periods: string[]) {
       ownerIds.map(async (ownerId) => {
         const key = cacheKey(ownerId, period);
         const summary = byKey.get(key);
-        if (!summary || summary.piggyBank == null) {
+        if (!summary) {
           const fresh = await getOverviewSummary(ownerId, period);
           if (fresh) byKey.set(key, fresh);
         }

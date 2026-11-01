@@ -196,9 +196,16 @@ export default function ForgotPasswordForm() {
               className="mb-4 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
             />
 
+            {/* 重設密碼會讓 tokenVersion +1(見 /api/auth/reset-password),所有裝置都要重新登入 */}
+            <p className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+              重設密碼後,所有已登入這個帳號的裝置都會在 30 分鐘內自動登出,需要用新密碼重新登入。
+            </p>
+
             {error && <p className="mb-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
             {success && (
-              <p className="mb-4 text-sm text-green-600 dark:text-green-400">密碼已更新,正在前往登入頁...</p>
+              <p className="mb-4 text-sm text-green-600 dark:text-green-400">
+                密碼已更新,其他裝置會在 30 分鐘內自動登出,正在前往登入頁...
+              </p>
             )}
             {resendMessage && !error && (
               <p className="mb-4 text-sm text-green-600 dark:text-green-400">{resendMessage}</p>

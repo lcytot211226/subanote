@@ -4,6 +4,7 @@ import Subscription from "@/lib/models/Subscription";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
 import { generateDueSubscriptionTransactions } from "@/lib/generateSubscriptionTransactions";
+import { DEFAULT_EXPENSE_KIND, isExpenseKind } from "@/lib/expenseKind";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -14,13 +15,16 @@ export async function PUT(request: Request, { params }: Context) {
   }
 
   const { id } = await params;
-  const { item, amount, category, card, startDate } = await request.json();
+  const { item, amount, category, card, startDate, kind } = await request.json();
 
   if (!item || !amount || !category || !startDate) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
   }
   if (category === "credit_card" && !card) {
     return NextResponse.json({ error: "信用卡訂閱需要指定卡片" }, { status: 400 });
+  }
+  if (kind != null && !isExpenseKind(kind)) {
+    return NextResponse.json({ error: "分類不正確" }, { status: 400 });
   }
 
   await connectToDatabase();
@@ -35,7 +39,14 @@ export async function PUT(request: Request, { params }: Context) {
   // 只改訂閱本身的設定,不動 lastGeneratedDate,所以已經生成過的交易不受影響,只有之後新生成的會套用新設定。
   const subscription = await Subscription.findOneAndUpdate(
     { _id: id, user: auth.userId },
-    { item, amount, category, card: category === "cash" ? null : card, startDate: new Date(startDate) },
+    {
+      item,
+      kind: kind ?? DEFAULT_EXPENSE_KIND,
+      amount,
+      category,
+      card: category === "cash" ? null : card,
+      startDate: new Date(startDate),
+    },
     { new: true, runValidators: true }
   ).populate("card");
   if (!subscription) {

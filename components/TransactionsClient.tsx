@@ -13,10 +13,16 @@ import {
   ListIcon,
   Columns2Icon,
   Columns3Icon,
+  PlusIcon,
 } from "./icons";
 import { useSearchParams } from "next/navigation";
 import { usePeriod } from "@/lib/usePeriod";
 import { netAmount } from "@/lib/pointsDiscount";
+import { isKindFor, kindOf, type TransactionKind } from "@/lib/transactionKind";
+import KindIcon from "./KindIcon";
+import { KindFilter } from "./KindPicker";
+import Dropdown from "./Dropdown";
+import { ALL_ICON, cardOptions, paymentOption } from "./dropdownOptions";
 
 export type TransactionDTO = {
   _id: string;
@@ -24,6 +30,8 @@ export type TransactionDTO = {
   date: string;
   category: "installment" | "cash" | "credit_card";
   item: string;
+  /** 分類(收入、支出各一組),舊資料沒有或對不上收支類型時視為「其他」(kindOf) */
+  kind?: TransactionKind | null;
   card: CardDTO | null;
   installmentInfo: { currentNumber: number; totalNumber: number } | null;
   amount: number;
@@ -72,20 +80,22 @@ const GRID_CLASS: Record<Columns, string> = {
 const CATEGORY_VALUES = ["cash", "credit_card", "installment"] as const;
 
 /**
- * 從網址 query 讀出初始篩選:`?category=cash|credit_card|installment&card=<cardId>&q=<關鍵字>`
+ * 從網址 query 讀出初始篩選:`?category=cash|credit_card|installment&card=<cardId>&kind=<分類>&q=<關鍵字>`
  * (月份 `?period=` 由 usePeriod 處理)。不合法的值直接忽略;只帶 card 時視為信用卡篩選;
- * 收入一律是現金,不吃 category / card。
+ * 收入一律是現金,不吃 category / card(kind 則依收支類型檢查)。
  */
 function readInitialFilters(searchParams: URLSearchParams, type: "income" | "expense", cards: CardDTO[]) {
   const q = searchParams.get("q") ?? "";
-  if (type === "income") return { category: "", card: "", q };
+  const rawKind = searchParams.get("kind") ?? "";
+  const kind: TransactionKind | "" = isKindFor(type, rawKind) ? rawKind : "";
+  if (type === "income") return { category: "", card: "", kind, q };
   const rawCategory = searchParams.get("category") ?? "";
   const rawCard = searchParams.get("card") ?? "";
   let category = (CATEGORY_VALUES as readonly string[]).includes(rawCategory) ? rawCategory : "";
   let card = cards.some((c) => c._id === rawCard) ? rawCard : "";
   if (card && !category) category = "credit_card";
   if (category === "cash") card = "";
-  return { category, card, q };
+  return { category, card, kind, q };
 }
 
 const CATEGORY_LABEL: Record<TransactionDTO["category"], string> = {
@@ -99,19 +109,26 @@ export default function TransactionsClient({
   initialCards,
   refreshToken,
   actions,
+  addAlternative,
 }: {
   type: "income" | "expense";
   initialCards: CardDTO[];
   /** 由外層在訂閱新增/編輯/刪除後帶入不同的值,觸發重新讀取交易列表。 */
   refreshToken?: number;
-  /** 顯示在「新增{label}」按鈕旁邊的額外按鈕(例如訂閱相關操作)。 */
+  /** 顯示在篩選列右邊的額外按鈕(例如訂閱相關操作);新增交易是右下角的浮動「+」。 */
   actions?: ReactNode;
+  /**
+   * 浮動「+」新增視窗裡的第二個分頁(例如支出頁的「訂閱」):有帶入時視窗上方會出現
+   * 「{label} / {addAlternative.label}」切換,選到第二個就改顯示 render 出來的表單。
+   */
+  addAlternative?: { label: string; render: (close: () => void) => ReactNode };
 }) {
   const { period, setPeriod, ready } = usePeriod();
   const searchParams = useSearchParams();
   const [initialFilters] = useState(() => readInitialFilters(searchParams, type, initialCards));
   const [category, setCategory] = useState(initialFilters.category);
   const [cardFilter, setCardFilter] = useState(initialFilters.card);
+  const [kindFilter, setKindFilter] = useState<TransactionKind | "">(initialFilters.kind);
   const [search, setSearch] = useState(initialFilters.q);
   const [columns, setColumns] = useState<Columns>(1);
   const [sortKey, setSortKey] = useState<SortKey>("date");
@@ -120,6 +137,7 @@ export default function TransactionsClient({
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TransactionDTO | null>(null);
+  const [addingAlternative, setAddingAlternative] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TransactionDTO | null>(null);
 
   const showCardFilter = category === "credit_card" || category === "installment";
@@ -182,8 +200,9 @@ export default function TransactionsClient({
     setEditing(null);
   }
 
-  function handleDelete(t: TransactionDTO) {
-    setDeleteTarget(t);
+  function openEdit(t: TransactionDTO) {
+    setShowForm(false);
+    setEditing(t);
   }
 
   // 新增 / 編輯 / 刪除都直接用 API 的回應更新本地列表,不重新抓整個月份。
@@ -199,8 +218,11 @@ export default function TransactionsClient({
   }
 
   function handleSaved(saved: TransactionDTO) {
+    const groupId = saved.installmentGroupId;
     setTransactions((prev) =>
-      belongsHere(saved) ? prev.map((t) => (t._id === saved._id ? saved : t)) : prev.filter((t) => t._id !== saved._id)
+      (belongsHere(saved) ? prev.map((t) => (t._id === saved._id ? saved : t)) : prev.filter((t) => t._id !== saved._id))
+        // 同一組分期共用分類,後端已經整組更新,這裡同步其他期數(若剛好也在這個月份)
+        .map((t) => (groupId && t._id !== saved._id && t.installmentGroupId === groupId ? { ...t, kind: saved.kind } : t))
     );
   }
 
@@ -210,6 +232,7 @@ export default function TransactionsClient({
     const res = await fetch(`/api/transactions/${target._id}`, { method: "DELETE" });
     setDeleteTarget(null);
     if (!res.ok) return;
+    closeForm();
     // 分期交易會整組一起刪(見 DELETE API),同一組的其他期數若也在這個月份要一併拿掉
     const groupId = target.installmentGroupId;
     setTransactions((prev) =>
@@ -225,6 +248,7 @@ export default function TransactionsClient({
       return false;
     }
     if (showCardFilter && cardFilter && t.card?._id !== cardFilter) return false;
+    if (kindFilter && kindOf(t) !== kindFilter) return false;
     return true;
   });
   // 名稱搜尋只在前端過濾已載入的當月資料,不另外打 API。
@@ -253,53 +277,40 @@ export default function TransactionsClient({
   });
   const total = visibleTransactions.reduce((sum, t) => sum + netAmount(t), 0);
   const label = type === "income" ? "收入" : "支出";
+  const showAlternative = !!addAlternative && !editing && addingAlternative;
 
   return (
-    <div className="flex flex-col gap-6">
+    // 底部留白,避免最後一筆被右下角的浮動「+」擋住
+    <div className="flex flex-col gap-6 pb-20">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-3">
           <MonthPicker value={period} onChange={setPeriod} />
           {/* 收入一律是現金(見 TransactionForm),付款方式篩選沒有意義,只在支出顯示 */}
           {type === "expense" && (
-            <select
+            <Dropdown
               value={category}
-              onChange={(e) => handleCategoryChange(e.target.value)}
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-            >
-              <option value="">全部付款方式</option>
-              <option value="cash">現金</option>
-              <option value="credit_card">信用卡</option>
-              <option value="installment">分期</option>
-            </select>
+              onChange={handleCategoryChange}
+              ariaLabel="付款方式"
+              options={[
+                { value: "", label: "全部付款方式", icon: ALL_ICON },
+                paymentOption("cash", "現金"),
+                paymentOption("credit_card", "信用卡"),
+                paymentOption("installment", "分期"),
+              ]}
+            />
           )}
+          {/* 信用卡篩選跟著付款方式出現,放在它旁邊 */}
           {showCardFilter && (
-            <select
+            <Dropdown
               value={cardFilter}
-              onChange={(e) => setCardFilter(e.target.value)}
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-            >
-              <option value="">全部信用卡</option>
-              {initialCards.map((card) => (
-                <option key={card._id} value={card._id}>
-                  {card.name}
-                </option>
-              ))}
-            </select>
+              onChange={setCardFilter}
+              ariaLabel="信用卡"
+              options={[{ value: "", label: "全部信用卡", icon: ALL_ICON }, ...cardOptions(initialCards)]}
+            />
           )}
+          <KindFilter type={type} value={kindFilter} onChange={setKindFilter} />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {actions}
-          <button
-            type="button"
-            onClick={() => {
-              setEditing(null);
-              setShowForm(true);
-            }}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            新增{label}
-          </button>
-        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -396,19 +407,54 @@ export default function TransactionsClient({
         </div>
       </div>
 
-      <Modal open={showForm || !!editing} onClose={closeForm} title={editing ? `編輯${label}` : `新增${label}`}>
-        <TransactionForm
-          key={editing ? editing._id : "new"}
-          type={type}
-          cards={initialCards}
-          transaction={editing ?? undefined}
-          onSaved={(saved) => {
-            closeForm();
-            handleSaved(saved);
-          }}
-          onAdded={handleAdded}
-          onCancel={closeForm}
-        />
+      <Modal
+        open={showForm || !!editing}
+        onClose={closeForm}
+        title={editing ? `編輯${label}` : `新增${showAlternative ? addAlternative.label : label}`}
+      >
+        {addAlternative && !editing && (
+          <div
+            role="group"
+            aria-label="新增類型"
+            className="mb-4 grid grid-cols-2 gap-1 rounded-md border border-zinc-300 p-0.5 text-sm dark:border-zinc-700"
+          >
+            {[
+              { alt: false, text: label },
+              { alt: true, text: addAlternative.label },
+            ].map((opt) => (
+              <button
+                key={opt.text}
+                type="button"
+                onClick={() => setAddingAlternative(opt.alt)}
+                aria-pressed={addingAlternative === opt.alt}
+                className={`rounded px-3 py-1.5 font-medium ${
+                  addingAlternative === opt.alt
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                {opt.text}
+              </button>
+            ))}
+          </div>
+        )}
+        {showAlternative ? (
+          addAlternative.render(closeForm)
+        ) : (
+          <TransactionForm
+            key={editing ? editing._id : "new"}
+            type={type}
+            cards={initialCards}
+            transaction={editing ?? undefined}
+            onSaved={(saved) => {
+              closeForm();
+              handleSaved(saved);
+            }}
+            onAdded={handleAdded}
+            onCancel={closeForm}
+            onDelete={editing ? () => setDeleteTarget(editing) : undefined}
+          />
+        )}
       </Modal>
 
       <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -432,50 +478,61 @@ export default function TransactionsClient({
         {visibleTransactions.map((t) => (
           <li
             key={t._id}
-            className={`flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 ${
-              columns === 1 ? "sm:flex-row sm:items-center sm:justify-between" : "justify-between"
+            role="button"
+            tabIndex={0}
+            onClick={() => openEdit(t)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openEdit(t);
+              }
+            }}
+            // 手機一律單欄:名稱在左、金額在右;桌面 2 / 3 欄才改成上下堆疊
+            className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800/60 ${
+              columns === 1 ? "" : "sm:flex-col sm:items-stretch sm:gap-2"
             }`}
           >
-            <div>
-              <p className="font-medium text-zinc-900 dark:text-zinc-50">{t.item}</p>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                {t.date.slice(0, 10)} · {CATEGORY_LABEL[t.category]}
-                {t.card ? ` · ${t.card.name}` : ""}
-                {t.installmentInfo ? ` · 第${t.installmentInfo.currentNumber}/${t.installmentInfo.totalNumber}期` : ""}
-                {!t.posted ? " · 未入帳" : ""}
-                {t.subscription ? " · 訂閱" : ""}
-              </p>
+            <div className="flex min-w-0 items-center gap-3">
+              <KindIcon kind={kindOf(t)} />
+              <div className="min-w-0">
+                <p className="font-medium text-zinc-900 dark:text-zinc-50">{t.item}</p>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  {t.date.slice(0, 10)} · {CATEGORY_LABEL[t.category]}
+                  {t.card ? ` · ${t.card.name}` : ""}
+                  {t.installmentInfo ? ` · 第${t.installmentInfo.currentNumber}/${t.installmentInfo.totalNumber}期` : ""}
+                  {!t.posted ? " · 未入帳" : ""}
+                  {t.subscription ? " · 訂閱" : ""}
+                </p>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="mr-auto font-medium text-zinc-900 dark:text-zinc-50">
+            <div className={`shrink-0 text-right ${columns === 1 ? "" : "sm:text-left"}`}>
+              <span className="font-medium text-zinc-900 dark:text-zinc-50">
                 ${netAmount(t).toLocaleString()}
                 {t.pointsDiscount ? (
-                  <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                  <span className="block text-xs font-normal text-zinc-500 sm:ml-2 sm:inline dark:text-zinc-400">
                     ${t.amount.toLocaleString()} − 點數 ${t.pointsDiscount.toLocaleString()}
                   </span>
                 ) : null}
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowForm(false);
-                  setEditing(t);
-                }}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
-              >
-                編輯
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDelete(t)}
-                className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 dark:border-red-800 dark:text-red-400"
-              >
-                刪除
-              </button>
             </div>
           </li>
         ))}
       </ul>
+
+      {/* 新增按鈕:右下角浮動「+」,樣式同 /overview 手機版的快速記帳(QuickAddButton),桌面版也一樣 */}
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(null);
+          setAddingAlternative(false);
+          setShowForm(true);
+        }}
+        aria-label={`新增${label}`}
+        title={`新增${label}`}
+        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-white shadow-lg transition-transform hover:bg-zinc-700 active:scale-90 motion-reduce:transition-none sm:bottom-8 sm:right-8 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+      >
+        <PlusIcon className="h-7 w-7" />
+      </button>
 
       <ConfirmDialog
         open={!!deleteTarget}

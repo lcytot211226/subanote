@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongodb";
 import User from "@/lib/models/User";
-import { hashPassword, requireAuth, verifyPassword } from "@/lib/auth";
+import { hashPassword, requireAuth, setAuthCookie, verifyPassword } from "@/lib/auth";
 
 export async function POST(request: Request) {
   const auth = await requireAuth();
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
 
   const { currentPassword, newPassword } = await request.json();
 
-  if (!currentPassword || !newPassword) {
+  if (typeof currentPassword !== "string" || !currentPassword || !newPassword) {
     return NextResponse.json({ error: "請輸入目前密碼與新密碼" }, { status: 400 });
   }
   if (typeof newPassword !== "string" || newPassword.length < 4) {
@@ -29,7 +29,10 @@ export async function POST(request: Request) {
   }
 
   user.password = await hashPassword(newPassword);
+  // 改密碼後其他裝置都要重新登入(舊 token 的版本號會對不上);目前這台換發新版本號的 token,不會被登出
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
+  await setAuthCookie({ userId: user._id.toString(), email: user.email, ver: user.tokenVersion });
 
   return NextResponse.json({ success: true });
 }

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "@/components/Navbar";
+import BottomNav from "@/components/BottomNav";
 import { ToastProvider } from "@/components/ToastProvider";
 import RouteChangeToast from "@/components/RouteChangeToast";
 import "./globals.css";
@@ -26,6 +27,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#799ef6",
+  // 讓 env(safe-area-inset-bottom) 在 iPhone 有 home bar 的機型上生效(底部分頁列 / 浮動按鈕要避開)
+  viewportFit: "cover",
 };
 
 // 主題偏好的規則見 lib/theme.ts:localStorage 沒有 "theme" = 跟隨系統。
@@ -62,6 +65,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <RouteChangeToast />
           <Navbar />
           <main className="flex-1">{children}</main>
+          <BottomNav />
         </ToastProvider>
       </body>
     </html>

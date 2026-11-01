@@ -5,6 +5,7 @@ import ExpenseClient from "@/components/ExpenseClient";
 import type { CardDTO } from "@/components/CardForm";
 import type { SubscriptionDTO } from "@/components/SubscriptionsClient";
 import { getCurrentUser } from "@/lib/auth";
+import { expenseKindOf } from "@/lib/expenseKind";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export default async function ExpensePage() {
   const subscriptionDTOs: SubscriptionDTO[] = subscriptions.map((sub) => ({
     _id: sub._id.toString(),
     item: sub.item,
+    kind: expenseKindOf(sub),
     amount: sub.amount,
     category: sub.category,
     card: sub.card

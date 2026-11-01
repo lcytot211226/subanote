@@ -7,6 +7,8 @@ const CustomItemSchema = new Schema(
     year: { type: Number, required: true },
     month: { type: Number, required: true, min: 1, max: 12 },
     name: { type: String, required: true },
+    /** 日期(DD,1-31,選填),只是記錄用,不影響歸屬月份;舊資料沒有這個欄位 */
+    date: { type: Number, min: 1, max: 31 },
     amount: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }

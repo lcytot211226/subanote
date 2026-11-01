@@ -4,11 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import MonthPicker from "./MonthPicker";
 import OverviewChart, { type DailyExpense } from "./OverviewChart";
+import CategoryBreakdown from "./CategoryBreakdown";
 import QuickAddButton from "./QuickAddButton";
 import YearOverview from "./YearOverview";
 import UtilityInlineEditor, { toUtilityDTO, type UtilityDTO } from "./UtilityInlineEditor";
 import CustomItemsEditor, { type CustomItemDTO } from "./CustomItemsEditor";
-import PiggyBankTile from "./PiggyBankTile";
 import SpecialDatePrompt from "./SpecialDatePrompt";
 import SharedItemsSection, { type IncomingShareDTO } from "./SharedItemsSection";
 import type { TransactionDTO } from "./TransactionsClient";
@@ -23,6 +23,7 @@ import { netAmount } from "@/lib/pointsDiscount";
 import { writeCachedCards } from "@/lib/cardsCache";
 import {
   ArrowDownCircleIcon,
+  ArrowPathIcon,
   ArrowUpCircleIcon,
   BanknotesIcon,
   CalendarDaysIcon,
@@ -76,7 +77,6 @@ export default function OverviewClient() {
   const { showLoading, dismiss } = useToast();
   const [utility, setUtility] = useState<UtilityDTO | null>(null);
   const [customItems, setCustomItems] = useState<CustomItemDTO[]>([]);
-  const [piggyBankAmount, setPiggyBankAmount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<TransactionDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [specialDate, setSpecialDate] = useState<number | null>(null);
@@ -124,7 +124,6 @@ export default function OverviewClient() {
 
       setUtility(overviewData.utility ? toUtilityDTO(overviewData.utility) : null);
       setCustomItems(overviewData.customItems ?? []);
-      setPiggyBankAmount(overviewData.piggyBankAmount ?? null);
       setTransactions(transactionsData.transactions ?? []);
       setCardStatuses(overviewData.cardStatuses ?? {});
       if (cardsRes.ok) {
@@ -187,7 +186,6 @@ export default function OverviewClient() {
     })),
     utility,
     customItems,
-    piggyBankAmount,
   });
   const cashTotal = summary.cash;
   const installmentTotal = summary.installment;
@@ -209,9 +207,6 @@ export default function OverviewClient() {
   const sharedIncomeAdjustment = includeSharedInStats ? sharedTotals.income : 0;
   const sharedExpenseAdjustment = includeSharedInStats ? sharedTotals.expense : 0;
   const incomeTotal = summary.income + sharedIncomeAdjustment;
-  // 存錢罐存下的金額已經由 summarizeMonth 算進 summary.expense(只看自己的結餘,不受共享項目影響)。
-  // 存錢罐格子的預覽要用「存錢前」的自己結餘。
-  const balanceBeforeSaving = summary.balance + summary.piggyBank;
   const totalExpense = summary.expense + sharedExpenseAdjustment;
   const balance = incomeTotal - totalExpense;
 
@@ -332,6 +327,8 @@ export default function OverviewClient() {
         </div>
         <OverviewChart dailyExpense={dailyExpense} />
       </div>
+
+      <CategoryBreakdown transactions={transactions} period={period} loading={loading} />
 
       <UtilityInlineEditor
         year={year}
@@ -508,24 +505,20 @@ export default function OverviewClient() {
             </p>
             <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${customItemsTotal.toLocaleString()}</p>
           </div>
-          <div
-            className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800"
-            title={`分期 $${installmentTotal.toLocaleString()} · 訂閱 $${subscriptionTotal.toLocaleString()}`}
-          >
+          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
             <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
               <CalendarDaysIcon className="h-4 w-4" />
-              分期 / 訂閱
+              分期
             </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              ${(installmentTotal + subscriptionTotal).toLocaleString()}
-            </p>
+            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${installmentTotal.toLocaleString()}</p>
           </div>
-          <PiggyBankTile
-            period={period}
-            amount={piggyBankAmount}
-            balance={balanceBeforeSaving}
-            onChange={setPiggyBankAmount}
-          />
+          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
+            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
+              <ArrowPathIcon className="h-4 w-4" />
+              訂閱
+            </p>
+            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${subscriptionTotal.toLocaleString()}</p>
+          </div>
           <button
             type="button"
             onClick={() => setIncludeSharedInStats((prev) => !prev)}

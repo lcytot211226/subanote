@@ -47,7 +47,7 @@ export default function QuickAddButton({
         onClick={handleOpen}
         aria-label="快速記帳"
         title="快速記帳"
-        className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-white shadow-lg transition-transform active:scale-90 motion-reduce:transition-none sm:hidden dark:bg-zinc-100 dark:text-zinc-900"
+        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-white shadow-lg transition-transform active:scale-90 motion-reduce:transition-none sm:hidden dark:bg-zinc-100 dark:text-zinc-900"
       >
         <PlusIcon className="h-7 w-7" />
       </button>

@@ -1,10 +1,13 @@
 import mongoose, { Schema, type InferSchemaType } from "mongoose";
+import { EXPENSE_KINDS, DEFAULT_EXPENSE_KIND } from "../expenseKind";
 
 const SubscriptionSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     item: { type: String, required: true },
     amount: { type: Number, required: true },
+    /** 支出分類(見 lib/expenseKind.ts),之後生成的每一期交易都沿用這個分類;已生成的不會跟著改。 */
+    kind: { type: String, enum: EXPENSE_KINDS, default: DEFAULT_EXPENSE_KIND },
     category: { type: String, enum: ["cash", "credit_card"], required: true },
     card: { type: Schema.Types.ObjectId, ref: "Card", default: null },
     // 首次扣款日期,之後每月同一天(遇短月自動夾到月底)重複扣款。

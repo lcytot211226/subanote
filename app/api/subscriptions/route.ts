@@ -4,6 +4,7 @@ import Subscription from "@/lib/models/Subscription";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
 import { generateDueSubscriptionTransactions } from "@/lib/generateSubscriptionTransactions";
+import { DEFAULT_EXPENSE_KIND, isExpenseKind } from "@/lib/expenseKind";
 
 export async function GET() {
   const auth = await requireAuth();
@@ -22,13 +23,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未登入" }, { status: 401 });
   }
 
-  const { item, amount, category, card, startDate } = await request.json();
+  const { item, amount, category, card, startDate, kind } = await request.json();
 
   if (!item || !amount || !category || !startDate) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
   }
   if (category === "credit_card" && !card) {
     return NextResponse.json({ error: "信用卡訂閱需要指定卡片" }, { status: 400 });
+  }
+  if (kind != null && !isExpenseKind(kind)) {
+    return NextResponse.json({ error: "分類不正確" }, { status: 400 });
   }
 
   await connectToDatabase();
@@ -43,6 +47,7 @@ export async function POST(request: Request) {
   const subscription = await Subscription.create({
     user: auth.userId,
     item,
+    kind: kind ?? DEFAULT_EXPENSE_KIND,
     amount,
     category,
     card: category === "cash" ? null : card,

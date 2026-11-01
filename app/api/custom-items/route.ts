@@ -4,6 +4,7 @@ import CustomItem from "@/lib/models/CustomItem";
 import { requireAuth } from "@/lib/auth";
 import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { formatPeriod } from "@/lib/overviewItems";
+import { parseCustomItemDate } from "@/lib/customItemDate";
 
 export async function GET(request: Request) {
   const auth = await requireAuth();
@@ -30,13 +31,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未登入" }, { status: 401 });
   }
 
-  const { year, month, name, amount } = await request.json();
+  const { year, month, name, amount, date } = await request.json();
   if (!year || !month || !name) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
   }
+  const day = parseCustomItemDate(date, year, month);
+  if ("error" in day) {
+    return NextResponse.json({ error: day.error }, { status: 400 });
+  }
 
   await connectToDatabase();
-  const item = await CustomItem.create({ user: auth.userId, year, month, name, amount: amount ?? 0 });
+  const item = await CustomItem.create({
+    user: auth.userId,
+    year,
+    month,
+    name,
+    amount: amount ?? 0,
+    // 沒填日期就不寫這個欄位
+    ...(day.value != null ? { date: day.value } : {}),
+  });
   await recomputeOverviewSummary(auth.userId, formatPeriod(year, month));
   return NextResponse.json({ item }, { status: 201 });
 }

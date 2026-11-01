@@ -7,6 +7,7 @@ import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillin
 import { generateDueSubscriptionTransactions } from "@/lib/generateSubscriptionTransactions";
 import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { parsePointsDiscount } from "@/lib/pointsDiscount";
+import { DEFAULT_KIND, isKindFor } from "@/lib/transactionKind";
 
 export async function GET(request: Request) {
   const auth = await requireAuth();
@@ -46,10 +47,13 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount } = body;
+  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount, kind } = body;
 
   if (!type || !date || !category || !item || amount === undefined) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
+  }
+  if (kind != null && !isKindFor(type, kind)) {
+    return NextResponse.json({ error: "分類不正確" }, { status: 400 });
   }
 
   const discount = parsePointsDiscount(pointsDiscount, { type, category, amount: Number(amount) });
@@ -80,6 +84,8 @@ export async function POST(request: Request) {
     date: new Date(date),
     category,
     item,
+    // 收入、支出各有一組分類,沒帶就是「其他」
+    kind: kind ?? DEFAULT_KIND,
     card: category === "cash" ? null : card,
     installmentInfo: category === "installment" ? installmentInfo : null,
     amount,

@@ -238,6 +238,14 @@ export function TrashIcon({ className }: IconProps) {
   );
 }
 
+export function ChevronLeftIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M15.75 19.5 8.25 12l7.5-7.5" />
+    </Svg>
+  );
+}
+
 export function ChevronRightIcon({ className }: IconProps) {
   return (
     <Svg className={className}>
@@ -302,12 +310,130 @@ export function WaterDropIcon({ className }: IconProps) {
   );
 }
 
-export function PiggyBankIcon({ className }: IconProps) {
+// ---- 支出分類(lib/expenseKind.ts)----
+
+export function FoodIcon({ className }: IconProps) {
+  // 碗 + 筷子
   return (
     <Svg className={className}>
-      <path d="M19 11.5c0-3.3-3.1-6-7-6-1.1 0-2.2.2-3.1.6L6.5 4.5v3.1c-1 .8-1.7 1.8-2 2.9H3v3h1.6c.5 1.2 1.4 2.2 2.4 2.9v2.1h2.5v-1.2c.8.2 1.6.3 2.5.3s1.7-.1 2.5-.3v1.2H17v-2.1c1.2-.9 2-2.1 2-3.4h1.5v-1.5H19Z" />
-      <path d="M10 8.5h3" />
-      <path d="M15.5 11h.01" />
+      <path d="M3.5 11.5h17a8.5 8.5 0 0 1-17 0Z" />
+      <path d="M9 20h6" />
+      <path d="m13 8.5 6.5-5" />
+      <path d="m10 8.5 6-6" />
+    </Svg>
+  );
+}
+
+export function GamepadIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M7.5 7h9a4.5 4.5 0 0 1 4.4 5.5l-.9 4a2.5 2.5 0 0 1-4.3 1.1L14 16h-4l-1.7 1.6A2.5 2.5 0 0 1 4 16.5l-.9-4A4.5 4.5 0 0 1 7.5 7Z" />
+      <path d="M8 10v3M6.5 11.5h3" />
+      <path d="M15.5 10.5h.01M17 12.5h.01" />
+    </Svg>
+  );
+}
+
+export function ShoppingBagIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M5.5 8h13l-1 12.5h-11L5.5 8Z" />
+      <path d="M9 10V6.5a3 3 0 0 1 6 0V10" />
+    </Svg>
+  );
+}
+
+export function CarIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M5 11.5 6.8 6.6A1.5 1.5 0 0 1 8.2 5.5h7.6a1.5 1.5 0 0 1 1.4 1.1L19 11.5" />
+      <path d="M4 11.5h16a1 1 0 0 1 1 1V17H3v-4.5a1 1 0 0 1 1-1Z" />
+      <path d="M5.5 17v2M18.5 17v2" />
+      <path d="M7 14.25h.01M17 14.25h.01" />
+    </Svg>
+  );
+}
+
+export function MedicalIcon({ className }: IconProps) {
+  // 圓角方框 + 十字
+  return (
+    <Svg className={className}>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+      <path d="M12 8v8M8 12h8" />
+    </Svg>
+  );
+}
+
+export function BookIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M12 6.5C10.3 5.2 8 4.5 4 4.5v13c4 0 6.3.7 8 2 1.7-1.3 4-2 8-2v-13c-4 0-6.3.7-8 2Z" />
+      <path d="M12 6.5v13" />
+    </Svg>
+  );
+}
+
+export function SportIcon({ className }: IconProps) {
+  // 啞鈴
+  return (
+    <Svg className={className}>
+      <path d="M8 12h8" />
+      <rect x="5" y="7" width="3" height="10" rx="1" />
+      <rect x="16" y="7" width="3" height="10" rx="1" />
+      <path d="M2.5 10v4M21.5 10v4" />
+    </Svg>
+  );
+}
+
+export function EllipsisIcon({ className }: IconProps) {
+  // 「其他」:2×2 小方格,比三個點明顯
+  return (
+    <Svg className={className}>
+      <rect x="4" y="4" width="6.5" height="6.5" rx="1.5" />
+      <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" />
+      <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" />
+      <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" />
+    </Svg>
+  );
+}
+
+// ---- 收入分類(lib/incomeKind.ts)----
+
+export function BriefcaseIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <rect x="3.5" y="7" width="17" height="12.5" rx="2" />
+      <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" />
+      <path d="M3.5 12.5h17" />
+    </Svg>
+  );
+}
+
+export function GiftIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <rect x="3.5" y="8.5" width="17" height="4" rx="1" />
+      <path d="M5 12.5v7h14v-7" />
+      <path d="M12 8.5v11" />
+      <path d="M12 8.5c-1.5-3.5-5-4-5-1.75S9.5 8.5 12 8.5c2.5 0 5 .5 5-1.75S13.5 5 12 8.5Z" />
+    </Svg>
+  );
+}
+
+export function ArrowsRightLeftIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 8h15.5M16 4.5 19.5 8 16 11.5" />
+      <path d="M20 16H4.5M8 12.5 4.5 16 8 19.5" />
+    </Svg>
+  );
+}
+
+export function Cog6ToothIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065Z" />
+      <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
     </Svg>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Modal from "./Modal";
+import ConfirmDialog from "./ConfirmDialog";
 import { clearCachedCards } from "@/lib/cardsCache";
 import SpecialDateForm from "./SpecialDateForm";
 import ChangePasswordForm from "./ChangePasswordForm";
@@ -90,6 +91,7 @@ export default function SettingsClient() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
   const themePreference = useThemePreference();
   const themeLabel = THEME_OPTIONS.find((o) => o.value === themePreference)?.label;
 
@@ -106,6 +108,16 @@ export default function SettingsClient() {
   async function handleLogout() {
     setLoggingOut(true);
     await fetch("/api/auth/logout", { method: "POST" });
+    clearCachedCards();
+    router.push("/login");
+    router.refresh();
+  }
+
+  // 登出所有裝置:版本號 +1 讓所有舊 token 失效,目前這台也一起登出
+  async function handleLogoutAll() {
+    setConfirmLogoutAll(false);
+    setLoggingOut(true);
+    await fetch("/api/auth/logout-all", { method: "POST" });
     clearCachedCards();
     router.push("/login");
     router.refresh();
@@ -158,8 +170,32 @@ export default function SettingsClient() {
             />
           </button>
         </li>
+        <li>
+          <button
+            type="button"
+            onClick={() => setConfirmLogoutAll(true)}
+            disabled={loggingOut}
+            className={`${ROW_CLASS} disabled:opacity-50`}
+          >
+            <RowContent
+              Icon={ArrowRightStartOnRectangleIcon}
+              title="登出所有裝置"
+              description="懷疑帳號被盜用時使用,其他裝置最晚 30 分鐘內登出"
+              chevron={false}
+            />
+          </button>
+        </li>
         {dialogRow("deleteAccount", TrashIcon, "永久刪除帳號與所有資料", true)}
       </Group>
+
+      <ConfirmDialog
+        open={confirmLogoutAll}
+        title="登出所有裝置"
+        message="所有已登入這個帳號的裝置(包含這台)都會被登出,其他裝置最晚 30 分鐘內生效。確定嗎?"
+        confirmLabel="全部登出"
+        onConfirm={handleLogoutAll}
+        onCancel={() => setConfirmLogoutAll(false)}
+      />
 
       <Modal open={!!openDialog} onClose={() => setOpenKey(null)} title={openDialog?.title} size="sm">
         {openDialog?.content}
