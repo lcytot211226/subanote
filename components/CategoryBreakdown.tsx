@@ -79,29 +79,31 @@ function Panel({ type, transactions, period }: { type: TransactionType; transact
   }
 
   return (
-    // h-full:撐滿兩邊共用的高度再置中,圓環在收入 / 支出兩邊的位置才會一樣,切換時不會跳動
-    <div className="flex h-full items-center gap-4 sm:gap-8">
+    // h-full:撐滿兩邊共用的高度再置中,圓環在收入 / 支出兩邊的位置才會一樣,切換時不會跳動。
+    // 手機寬度不夠圓環跟列表並排,改成圓環在上、列表在下
+    <div className="flex h-full flex-col items-center gap-4 sm:flex-row sm:gap-8">
       <Donut rows={rows} total={total} label={label} />
-      <ul className="flex min-w-0 flex-1 flex-col gap-1">
+      {/* 用 subgrid 讓每一列的欄位對齊:金額寬度不同也不會擠壓比例條,每根底條一樣長,長短才能直接比較 */}
+      <ul className="grid w-full min-w-0 grid-cols-[auto_auto_minmax(1.5rem,1fr)_auto_auto] gap-y-1 sm:flex-1">
         {rows.map((row) => (
-          <li key={row.kind}>
+          <li key={row.kind} className="col-span-5 grid grid-cols-subgrid">
             {/* 點一列直接看這個分類這個月的明細 */}
             <Link
               href={`/${type}?period=${period}&kind=${row.kind}`}
-              className="flex items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+              className="col-span-5 grid grid-cols-subgrid items-center gap-x-2 rounded-md px-1 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
             >
               <KindIcon kind={row.kind} size="sm" />
-              <span className="w-8 shrink-0 text-zinc-700 dark:text-zinc-300">{KIND_LABEL[row.kind]}</span>
-              <span className="h-2 min-w-6 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+              <span className="whitespace-nowrap text-zinc-700 dark:text-zinc-300">{KIND_LABEL[row.kind]}</span>
+              <span className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                 <span
                   className={`block h-full rounded-full ${KIND_FILL[row.kind].bar}`}
                   style={{ width: `${Math.max(row.ratio * 100, 2)}%` }}
                 />
               </span>
-              <span className="shrink-0 text-right tabular-nums text-zinc-900 dark:text-zinc-50">
+              <span className="text-right tabular-nums text-zinc-900 dark:text-zinc-50">
                 ${row.amount.toLocaleString()}
               </span>
-              <span className="w-9 shrink-0 text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+              <span className="w-9 text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
                 {Math.round(row.ratio * 100)}%
               </span>
             </Link>
