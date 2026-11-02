@@ -185,8 +185,10 @@ export default function SettingsClient() {
             />
           </button>
         </li>
-        {dialogRow("deleteAccount", TrashIcon, "永久刪除帳號與所有資料", true)}
       </Group>
+
+      {/* 危險操作自成一組放最下面,跟登出等日常操作分開,避免誤點 */}
+      <Group>{dialogRow("deleteAccount", TrashIcon, "永久刪除帳號與所有資料", true)}</Group>
 
       <ConfirmDialog
         open={confirmLogoutAll}
