@@ -27,6 +27,12 @@ export async function connectToDatabase() {
     cache.promise = mongoose.connect(MONGODB_URI as string);
   }
 
-  cache.conn = await cache.promise;
+  try {
+    cache.conn = await cache.promise;
+  } catch (error) {
+    // 連線失敗不要把 rejected promise 留在快取裡,否則之後每個請求都直接丟同一個錯誤、永遠不重連
+    cache.promise = null;
+    throw error;
+  }
   return cache.conn;
 }

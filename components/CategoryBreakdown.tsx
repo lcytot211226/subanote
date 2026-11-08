@@ -6,23 +6,43 @@ import { netAmount } from "@/lib/pointsDiscount";
 import { KIND_LABEL, kindOf, kindsFor, type TransactionKind, type TransactionType } from "@/lib/transactionKind";
 import KindIcon, { KIND_FILL } from "./KindIcon";
 import { TagIcon } from "./icons";
-import type { TransactionDTO } from "./TransactionsClient";
+import SharedToggleButton from "./SharedToggleButton";
 
-type Row = { kind: TransactionKind; amount: number; ratio: number };
+/** amount 含共享,sharedAmount 是其中來自別人分享的部分(長條另外上色) */
+type Row = { kind: TransactionKind; amount: number; sharedAmount: number; ratio: number };
+
+/** 只需要統計用的欄位:自己的交易(TransactionDTO)和別人分享給我的交易(SharedTransaction)都能直接傳進來 */
+export type BreakdownTransaction = {
+  type: TransactionType;
+  kind?: string | null;
+  amount: number;
+  pointsDiscount?: number | null;
+  /** 別人分享給我的交易,長條裡另外用共享色顯示 */
+  shared?: boolean;
+};
+
+const SHARED_BAR = "bg-indigo-400 dark:bg-indigo-500";
 
 const TYPE_LABEL: Record<TransactionType, string> = { expense: "支出", income: "收入" };
 
 /** 這個月某一類(收入 / 支出)交易依分類加總,金額由多到少,只留有金額的分類。 */
-function breakdown(transactions: TransactionDTO[], type: TransactionType) {
+function breakdown(transactions: BreakdownTransaction[], type: TransactionType) {
   const sums = new Map<TransactionKind, number>();
+  const sharedSums = new Map<TransactionKind, number>();
   for (const t of transactions) {
     if (t.type !== type) continue;
     const kind = kindOf(t);
     sums.set(kind, (sums.get(kind) ?? 0) + netAmount(t));
+    if (t.shared) sharedSums.set(kind, (sharedSums.get(kind) ?? 0) + netAmount(t));
   }
   const total = [...sums.values()].reduce((a, b) => a + b, 0);
   const rows: Row[] = kindsFor(type)
-    .map((kind) => ({ kind, amount: sums.get(kind) ?? 0, ratio: total > 0 ? (sums.get(kind) ?? 0) / total : 0 }))
+    .map((kind) => ({
+      kind,
+      amount: sums.get(kind) ?? 0,
+      sharedAmount: sharedSums.get(kind) ?? 0,
+      ratio: total > 0 ? (sums.get(kind) ?? 0) / total : 0,
+    }))
     .filter((r) => r.amount > 0)
     .sort((a, b) => b.amount - a.amount);
   return { rows, total };
@@ -66,7 +86,15 @@ function Donut({ rows, total, label }: { rows: Row[]; total: number; label: stri
   );
 }
 
-function Panel({ type, transactions, period }: { type: TransactionType; transactions: TransactionDTO[]; period: string }) {
+function Panel({
+  type,
+  transactions,
+  period,
+}: {
+  type: TransactionType;
+  transactions: BreakdownTransaction[];
+  period: string;
+}) {
   const { rows, total } = breakdown(transactions, type);
   const label = TYPE_LABEL[type];
 
@@ -95,10 +123,24 @@ function Panel({ type, transactions, period }: { type: TransactionType; transact
               <KindIcon kind={row.kind} size="sm" />
               <span className="whitespace-nowrap text-zinc-700 dark:text-zinc-300">{KIND_LABEL[row.kind]}</span>
               <span className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                {/* 長條總長 = 這個分類的佔比;裡面先畫自己的(分類色),再接共享的部分(共享色) */}
                 <span
-                  className={`block h-full rounded-full ${KIND_FILL[row.kind].bar}`}
+                  className="flex h-full overflow-hidden rounded-full"
                   style={{ width: `${Math.max(row.ratio * 100, 2)}%` }}
-                />
+                  title={
+                    row.sharedAmount > 0
+                      ? `自己 $${(row.amount - row.sharedAmount).toLocaleString()} / 共享 $${row.sharedAmount.toLocaleString()}`
+                      : undefined
+                  }
+                >
+                  <span
+                    className={`h-full ${KIND_FILL[row.kind].bar}`}
+                    style={{ width: `${((row.amount - row.sharedAmount) / row.amount) * 100}%` }}
+                  />
+                  {row.sharedAmount > 0 && (
+                    <span className={`h-full ${SHARED_BAR}`} style={{ width: `${(row.sharedAmount / row.amount) * 100}%` }} />
+                  )}
+                </span>
               </span>
               <span className="text-right tabular-nums text-zinc-900 dark:text-zinc-50">
                 ${row.amount.toLocaleString()}
@@ -119,16 +161,19 @@ function Panel({ type, transactions, period }: { type: TransactionType; transact
  * 每邊一個簡單圓環 + 由多到少的橫條列表,點一列導到 /expense 或 /income 並帶入該分類篩選。
  * 用右上角「支出 / 收入」切換(預設支出),一次只顯示一邊,圓環才有空間放大;
  * 兩邊疊在同一格,高度取較高的那邊,切換時卡片高度不變。
- * 只統計交易紀錄(用前端已經抓回來的當月交易現場算),不含房租水電、自訂項目與共享項目。
+ * 只統計交易紀錄(用前端已經抓回來的當月交易現場算,含已納入的共享交易),不含房租水電。
  */
 export default function CategoryBreakdown({
   transactions,
   period,
   loading,
+  shared,
 }: {
-  transactions: TransactionDTO[];
+  transactions: BreakdownTransaction[];
   period: string;
   loading: boolean;
+  /** 有已納入的共享資料時才傳:是否計入共享交易的開關(跟總覽其他共享開關同步) */
+  shared?: { on: boolean; onToggle: () => void };
 }) {
   const [type, setType] = useState<TransactionType>("expense");
 
@@ -141,26 +186,29 @@ export default function CategoryBreakdown({
           <TagIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
           {period} 分類統計
         </h2>
-        <div
-          role="group"
-          aria-label="支出或收入"
-          className="grid grid-cols-2 gap-0.5 rounded-md border border-zinc-300 p-0.5 text-xs dark:border-zinc-700"
-        >
-          {(["expense", "income"] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setType(t)}
-              aria-pressed={type === t}
-              className={`rounded px-2.5 py-1 font-medium ${
-                type === t
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 dark:text-zinc-300"
-              }`}
-            >
-              {TYPE_LABEL[t]}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div
+            role="group"
+            aria-label="支出或收入"
+            className="grid grid-cols-2 gap-0.5 rounded-md border border-zinc-300 p-0.5 text-xs dark:border-zinc-700"
+          >
+            {(["expense", "income"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setType(t)}
+                aria-pressed={type === t}
+                className={`rounded px-2.5 py-1 font-medium ${
+                  type === t
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                {TYPE_LABEL[t]}
+              </button>
+            ))}
+          </div>
+          {shared && <SharedToggleButton on={shared.on} onToggle={shared.onToggle} />}
         </div>
       </div>
 
@@ -178,7 +226,16 @@ export default function CategoryBreakdown({
         ))}
       </div>
 
-      <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">只統計交易紀錄,不含房租水電與自訂項目</p>
+      <p className="mt-3 flex flex-wrap items-center gap-x-1 text-xs text-zinc-400 dark:text-zinc-500">
+        只統計交易紀錄,不含房租水電
+        {transactions.some((t) => t.shared) && (
+          <span className="flex items-center gap-1">
+            ;長條中
+            <span className={`inline-block h-2 w-3 rounded-full ${SHARED_BAR}`} />
+            為共享項目
+          </span>
+        )}
+      </p>
     </div>
   );
 }

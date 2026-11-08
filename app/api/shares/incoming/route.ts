@@ -4,7 +4,7 @@ import { requireAuth } from "@/lib/auth";
 import { getIncomingShares } from "@/lib/getIncomingShares";
 
 /**
- * 別人分享給我的項目;金額即時從分享者當月的 OverviewSummary 讀出,我這邊決定要不要 included。
+ * 別人分享給我的資料(交易已去掉品項名稱);每次都從分享者當月的原始資料即時算,我這邊決定要不要 included。
  * /overview 改用 GET /api/overview 一次拿,這支保留給需要單獨讀取的情境。
  */
 export async function GET(request: Request) {

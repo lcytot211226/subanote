@@ -12,7 +12,6 @@ import {
   CreditCardIcon,
   HomeIcon,
   QuestionMarkCircleIcon,
-  TagIcon,
   UserGroupIcon,
 } from "@/components/icons";
 import { getCurrentUser } from "@/lib/auth";
@@ -21,7 +20,6 @@ import Notification from "@/lib/models/Notification";
 import {
   DEMO_CARDS,
   DEMO_CASH_TOTAL,
-  DEMO_CUSTOM_ITEMS_TOTAL,
   DEMO_DAILY_BUDGET,
   DEMO_ELEC_COST,
   DEMO_DAILY_EXPENSE,
@@ -349,15 +347,6 @@ export default async function Home() {
                 </p>
                 <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
                   ${DEMO_CASH_TOTAL.toLocaleString()}
-                </p>
-              </div>
-              <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-                <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  <TagIcon className="h-4 w-4" />
-                  自訂項目總開銷
-                </p>
-                <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                  ${DEMO_CUSTOM_ITEMS_TOTAL.toLocaleString()}
                 </p>
               </div>
               <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">

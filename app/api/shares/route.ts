@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongodb";
 import Share from "@/lib/models/Share";
-import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
-import { labelForItemKey } from "@/lib/overviewItems";
 
-/** 我(分享者)設定過的分享清單,用來管理/刪除。 */
+/** 我(分享者)分享給哪些 email,用來管理 / 取消分享。 */
 export async function GET() {
   const auth = await requireAuth();
   if (!auth) {
@@ -13,87 +11,39 @@ export async function GET() {
   }
 
   await connectToDatabase();
-  const [shares, cards] = await Promise.all([
-    Share.find({ owner: auth.userId }).sort({ createdAt: -1 }),
-    Card.find({ user: auth.userId }),
-  ]);
-  const cardNameById = new Map(cards.map((c) => [c._id.toString(), c.name]));
+  const shares = await Share.find({ owner: auth.userId }).sort({ createdAt: -1 });
+
+  // 同一個 email 只回一筆(舊資料一個項目存一筆,遷移合併前可能有好幾筆)
+  const seen = new Set<string>();
+  const unique = shares.filter((s) => !seen.has(s.targetEmail) && !!seen.add(s.targetEmail));
 
   return NextResponse.json({
-    shares: shares.map((s) => ({
-      _id: s._id.toString(),
-      targetEmail: s.targetEmail,
-      itemKey: s.itemKey,
-      label: labelForItemKey(s.itemKey, cardNameById),
-      included: s.included,
-    })),
+    shares: unique.map((s) => ({ _id: s._id.toString(), targetEmail: s.targetEmail })),
   });
 }
 
-/** 把一個或多個項目(itemKeys)分享給一個 email;email 不需要是已註冊的帳號。 */
+/** 把我的資料分享給一個 email(不需要是已註冊的帳號);已經分享過就維持原狀。 */
 export async function POST(request: Request) {
   const auth = await requireAuth();
   if (!auth) {
     return NextResponse.json({ error: "未登入" }, { status: 401 });
   }
 
-  const { targetEmail, itemKeys } = await request.json();
+  const { targetEmail } = await request.json();
   const email = typeof targetEmail === "string" ? targetEmail.trim().toLowerCase() : "";
-  if (!email || !Array.isArray(itemKeys) || itemKeys.length === 0) {
-    return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
+  if (!email) {
+    return NextResponse.json({ error: "請輸入對方的 email" }, { status: 400 });
   }
   if (email === auth.email.toLowerCase()) {
     return NextResponse.json({ error: "不能分享給自己" }, { status: 400 });
   }
 
   await connectToDatabase();
-  const shares = [];
-  for (const key of itemKeys) {
-    if (typeof key !== "string" || !key) continue;
-    const share = await Share.findOneAndUpdate(
-      { owner: auth.userId, targetEmail: email, itemKey: key },
-      { owner: auth.userId, targetEmail: email, itemKey: key },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-    shares.push(share);
-  }
+  const share = await Share.findOneAndUpdate(
+    { owner: auth.userId, targetEmail: email },
+    { $setOnInsert: { owner: auth.userId, targetEmail: email, included: false } },
+    { upsert: true, new: true }
+  );
 
-  return NextResponse.json({ shares }, { status: 201 });
-}
-
-/**
- * 把我分享給某個 email 的項目整份設成 itemKeys:清單裡原本沒有的就新增,原本有但不在清單裡的就刪除,
- * 兩邊都有的維持不動(保留收件人原本的 included 選擇)。itemKeys 為空陣列等於取消分享給這個人的所有項目。
- */
-export async function PUT(request: Request) {
-  const auth = await requireAuth();
-  if (!auth) {
-    return NextResponse.json({ error: "未登入" }, { status: 401 });
-  }
-
-  const { targetEmail, itemKeys } = await request.json();
-  const email = typeof targetEmail === "string" ? targetEmail.trim().toLowerCase() : "";
-  if (!email || !Array.isArray(itemKeys)) {
-    return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
-  }
-  if (email === auth.email.toLowerCase()) {
-    return NextResponse.json({ error: "不能分享給自己" }, { status: 400 });
-  }
-  const keys = Array.from(new Set(itemKeys.filter((key): key is string => typeof key === "string" && !!key)));
-
-  await connectToDatabase();
-  await Share.deleteMany({ owner: auth.userId, targetEmail: email, itemKey: { $nin: keys } });
-  if (keys.length > 0) {
-    await Share.bulkWrite(
-      keys.map((key) => ({
-        updateOne: {
-          filter: { owner: auth.userId, targetEmail: email, itemKey: key },
-          update: { $setOnInsert: { included: false } },
-          upsert: true,
-        },
-      }))
-    );
-  }
-
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ share: { _id: share._id.toString(), targetEmail: share.targetEmail } }, { status: 201 });
 }

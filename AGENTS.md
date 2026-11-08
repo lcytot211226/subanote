@@ -10,7 +10,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Subanote(個人記帳 Web App)
 
-一個使用 Next.js + MongoDB 打造的自訂記帳網站。核心是信用卡分期/訂閱扣款管理與房租水電紀錄,並延伸出訂閱惰性生成交易、跨帳號項目分享、系統公告通知、信用卡對帳追蹤、每日可花預算等功能;具備單一入口登入驗證、深色/淺色模式與 RWD 響應式設計(手機也能正常使用)。
+一個使用 Next.js + MongoDB 打造的自訂記帳網站。核心是信用卡分期/訂閱扣款管理與房租水電紀錄,並延伸出訂閱惰性生成交易、跨帳號收支分享、系統公告通知、信用卡對帳追蹤、每日可花預算等功能;具備單一入口登入驗證、深色/淺色模式與 RWD 響應式設計(手機也能正常使用)。
 
 > 本節(技術棧以下)是「現況文件」,會隨程式碼一起維護,反映目前實際的實作,而不是最初的需求規格。
 
@@ -54,7 +54,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 
 ## 資料庫結構
 
-共十二個 collection:`User`、`Card`、`Transaction`、`Subscription`、`Utility`、`CustomItem`、`CardReconciliation`、`OverviewSummary`、`Share`、`Notification`、`RewardPlan`、`RateLimit`。除了 `User`、全站共用的 `Notification` 和 `RateLimit` 外,其餘每個 collection 都有 `user`(`ObjectId`,參照 `User._id`)欄位做資料隔離,所有 API 查詢也一律加上 `user: auth.userId` 條件,確保使用者只能讀寫自己的資料。
+共十個 collection:`User`、`Card`、`Transaction`、`Subscription`、`Utility`、`CardReconciliation`、`Share`、`Notification`、`RewardPlan`、`RateLimit`。除了 `User`、全站共用的 `Notification` 和 `RateLimit` 外,其餘每個 collection 都有 `user`(`ObjectId`,參照 `User._id`)欄位做資料隔離,所有 API 查詢也一律加上 `user: auth.userId` 條件,確保使用者只能讀寫自己的資料。
 
 ### User(帳號)
 
@@ -203,25 +203,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 }
 ```
 
-> 每個 `(user, year, month)` 只會有一筆(unique index),`/overview` 的房租水電 inline 編輯是用 `PUT /api/utilities`(不帶 id,依 year+month upsert)整份覆寫。金額計算見 `lib/calculateMeterCost.ts`:`manualAmount` 有值就直接用它,否則用 `max(0, end - start) × unitPrice`;計入統計(月度彙總、房租水電總額)的 `calculateMeterCost()` 一律四捨五入到整數,含小數的實際金額(`calculateMeterCostExact()`)只用於畫面上點擊查看。
-
-### CustomItem(自訂月費項目)
-
-```ts
-{
-  _id: ObjectId,
-  user: ObjectId,
-  year: number,
-  month: number,   // 1-12
-  name: string,    // 例如「孝親費」
-  amount: number,
-  date?: number,   // DD(選填),必須是該月存在的日子(`lib/customItemDate.ts` 驗證);只是記錄用,不影響歸屬月份,沒填就沒有這個欄位
-  createdAt: Date,
-  updatedAt: Date
-}
-```
-
-> 使用者自行決定某個月要不要新增,不是每月固定存在的項目,用來記錄不方便歸類成一般交易或訂閱的月費開銷,計入該月支出總額。
+> 每個 `(user, year, month)` 只會有一筆(unique index),`/overview` 的房租水電 inline 編輯是用 `PUT /api/utilities`(不帶 id,依 year+month upsert)整份覆寫。金額計算見 `lib/calculateMeterCost.ts`:`manualAmount` 有值就直接用它,否則用 `max(0, end - start) × unitPrice`;計入統計(收支總額、房租水電總額)的 `calculateMeterCost()` 一律四捨五入到整數,含小數的實際金額(`calculateMeterCostExact()`)只用於畫面上點擊查看。
 
 ### CardReconciliation(信用卡對帳紀錄)
 
@@ -239,47 +221,24 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 
 > 對帳進度分三段:未對帳 → 已對帳(`reconciled`)→ 已繳費(`paid`)。「未對帳」不存狀態,用「這筆紀錄不存在」表示,回到未對帳就直接刪掉這筆紀錄;`(user, card, period)` 是 unique index。
 
-### OverviewSummary(每月彙總快取,供分享使用)
+### 月度彙總(不快取)
 
-```ts
-{
-  _id: ObjectId,
-  user: ObjectId,
-  period: string,      // "YYYY-MM"
-  income: number,
-  expense: number,     // 現金 + 分期 + 信用卡單筆交易 + 房租水電 + 自訂項目
-  cash: number,
-  installment: number,
-  subscription: number,
-  utility: number,
-  customItems: number,
-  balance: number,     // income - expense
-  cards: [{ card: ObjectId, total: number }],  // 每張信用卡當月刷卡總額
-  items: [{ key: string, amount: number }],    // 可分享項目快照,key 見下方 Share 說明
-  createdAt: Date,
-  updatedAt: Date
-}
-```
+> 沒有任何彙總快取 collection,所有數字每次都從原始資料(交易 + 房租水電)即時算。計算邏輯集中在純函式 `lib/summarizeMonth.ts` 的 `summarizeMonth()`(不碰資料庫):`/overview` 月檢視用前端已抓回來的當月交易 / 房租水電現場算(交易列表 API 回傳前已補生成到期的訂閱);後端(年度檢視、別人分享給我的資料)用 `lib/computeMonthSummaries.ts` 的 `loadMonthData()` 一次查出多個使用者 × 多個月份的原始資料,再經 `summarizeMonthData()` 走同一個 `summarizeMonth()`,數字一定一致。支出 = 交易支出(扣掉點數折抵)+ 房租水電。
 
-> `(user, period)` 是 unique index。這是一份**衍生/快取資料**,不是使用者直接輸入的來源資料——交易、房租水電、自訂項目任何一筆異動,對應 API route 都會呼叫 `lib/recomputeOverviewSummary.ts` 的 `recomputeOverviewSummary(userId, period)` 重新從原始資料算一次並整份覆寫,讓別人讀我的分享項目(`GET /api/shares/incoming`)時只要查一筆快取,不用拉我整個月的原始資料;若某個月從未被計算過(沒有快取),讀取時(`lib/getOverviewSummary.ts`)會即時算一次並補上。
->
-> **我自己的 `/overview` 月檢視不讀這份快取**(年度檢視 `GET /api/overview/year` 才讀),而是用前端已經抓回來的當月交易 / 房租水電 / 自訂項目現場加總(交易列表 API 回傳前已補生成到期的訂閱,所以一定包含最新的訂閱扣款,不會跟快取有時間差)。計算邏輯集中在純函式 `lib/summarizeMonth.ts` 的 `summarizeMonth()`(不碰資料庫),前端現場算與後端 `recomputeOverviewSummary`(經 `lib/computeMonthSummary.ts` 查原始資料)共用同一份,數字一定一致。`items` 裡的 `key` 只存代碼(例如 `"cash"`、`"card:<cardId>"`),顯示用的 label 一律由 API 層透過 `lib/overviewItems.ts` 的 `labelForItemKey()` 依 key 即時解析,避免卡片改名後舊快照裡的名稱跟著過期。
-
-### Share(跨帳號項目分享)
+### Share(跨帳號收支分享)
 
 ```ts
 {
   _id: ObjectId,
   owner: ObjectId,       // 分享者,參照 User._id
   targetEmail: string,   // 收件人 email,不需要對方已註冊
-  itemKey: string,       // "cash" | "installment" | "subscription" | "utility" | "customItems" | "card:<cardId>"
-  included: boolean,     // 收件人是否選擇把這筆分享納入自己的收支統計,預設 false
+  included: boolean,     // 收件人是否選擇把這份分享納入自己的收支統計,預設 false
   createdAt: Date,
   updatedAt: Date
 }
 ```
 
-> `(owner, targetEmail, itemKey)` 是 unique index。分享者把自己 `OverviewSummary` 裡某個固定項目(收入/支出/結餘/現金/分期/訂閱/房租水電/自訂項目)或某張信用卡的當月總額分享給任一 email;原始資料仍歸屬分享者,收件人登入後在自己的 `/overview` 看到這筆分享,可自行決定 `included` 要不要把金額納入自己的收支計算(不會真的寫成一筆交易,純粹是顯示/統計層的虛擬項目)。金額不落地存放,`GET /api/shares/incoming` 每次都即時從分享者當月的 `OverviewSummary` 讀取,永遠反映最新狀態。收件人納入的分享項目**收入與支出分開加總**,規則集中在 `lib/overviewItems.ts` 的 `includedSharedTotals()`:`income` 加進收入;`expense` 與其他開銷類(現金 / 分期 / 訂閱 / 房租水電 / 自訂項目 / 信用卡)加進支出;`balance`(結餘)代表分享者的收入和支出都抓,分別加進收入與支出(所以 `GET /api/shares/incoming` 的結餘項目會多帶 `income`、`expense` 兩個欄位)。同一個分享者的項目會去掉明顯重疊:選了結餘就不再加他的其他項目,選了支出就不再加開銷類分項;分項之間本身的重疊(例如分期也算在某張信用卡裡)不處理。`balance` 可以安全計入:`OverviewSummary` 只由分享者自己的原始資料算出、不含任何分享項目,所以互相分享結餘也不會遞迴或重複計算。
+> `(owner, targetEmail)` 是 unique index。分享只有「分享 / 不分享」,不能挑項目:分享者把自己的整份收支分享給任一 email,原始資料仍歸屬分享者。收件人的 `GET /api/shares/incoming`(`lib/getIncomingShares.ts`)每次都從分享者當月的原始資料即時算,回傳(型別 `IncomingShare`,`lib/sharedTransactions.ts`):`income` / `expense`(含房租水電)/ `utility`,以及當月每筆交易的**去識別化**版本 `{ type, date, category, kind, amount(已扣折抵), isSubscription }`——品項名稱、卡片、分期資訊等在後端就拿掉,不會送到收件人的瀏覽器,前端一律顯示成「共享項目」(`SHARED_ITEM_LABEL`)。收件人可自行決定 `included` 要不要納入自己的統計(不會真的寫成交易,純粹是顯示 / 統計層):納入時收入加進收入、支出加進支出(`includedSharedTotals()`),交易也併進每日支出圖表(同一天的共享交易合併成一筆「共享項目」)與分類統計;對方的房租水電只計入支出總額,不畫進圖表、分類統計,`IncomingShare` 另帶 `utilityDetail`(分享者當月房租水電明細,不含繳費狀態)。共享開啟時,`/overview` 房租水電區塊的合計與租金 / 電費 / 水費每一格都顯示「自己 + 共享」的加總,有共享的格子底下用淡靛藍小字標「共享 $X」(`UtilityInlineEditor` 的 `Tile` `sharedAmount`);「其他」區塊的現金 / 房租水電 / 分期 / 訂閱格子(`OverviewClient` 的 `StatTile`)也一樣顯示「自己 + 共享」並在底下標「共享 $X」,共享部分的分類同 `summarizeMonth`(現金 = 付款方式現金、分期、訂閱 = 訂閱生成,房租水電 = `sharedUtilityParts().total`);這些共享金額同時也算在上方的共享支出裡,所以「其他」各格不能直接相加。自己當月沒有資料時就只有共享的部分(唯讀,沒有總開關 / 繳費 / 編輯,「新增」仍可建立自己的)。共享部分由 `sharedUtilityParts()` 算出:只加總分享者有計入統計的項目,多位分享者相加,帳單日取最早的一天;編輯表單只改自己的資料。分享者已刪除帳號的分享直接略過。
 
 ### RewardPlan(信用卡回饋試算方案)
 
@@ -346,7 +305,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `POST /api/auth/forgot-password` | `{ email }`,寄送重設密碼驗證碼;帳號不存在或超過頻率限制也回傳成功(只是不寄) |
 | `POST /api/auth/reset-password` | `{ email, code, newPassword }`,驗證碼正確就更新密碼,並視為完成 email 驗證;`tokenVersion` +1 登出所有裝置;每組驗證碼最多試 5 次 |
 | `POST /api/auth/change-password` | `{ currentPassword, newPassword }`,需先驗證目前密碼;`tokenVersion` +1 讓其他裝置登出,目前這台換發新 token |
-| `POST /api/auth/delete-account` | `{ password }`,驗證密碼後刪除帳號本身,以及該使用者名下所有 Card / Transaction / Utility / CustomItem / OverviewSummary / Share(owner) / RewardPlan 資料 |
+| `POST /api/auth/delete-account` | `{ password }`,驗證密碼後刪除帳號本身,以及該使用者名下所有 Card / Transaction / Utility / Share(owner) / RewardPlan 資料 |
 
 ### 信用卡 `/api/cards`
 
@@ -361,8 +320,8 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | Method / 路徑 | 說明 |
 |---|---|
 | `GET /api/transactions` | 支援 `?type=&billingPeriod=&category=&card=` 篩選;查 `category=credit_card` 時會一併帶出 `installment`(分期本質上也是刷卡)。**讀取前一律先呼叫 `generateDueSubscriptionTransactions()` 補生成到期的訂閱交易**,確保 `/income`、`/expense`、`/overview` 永遠看得到最新結果 |
-| `POST /api/transactions` | 建立單筆交易(現金/信用卡單筆);信用卡單筆支出可帶 `pointsDiscount`(0 ~ amount,0/空值不存);自動用 `calculateBillingPeriod()` 算出 `billingPeriod` 並存入,同時觸發 `recomputeOverviewSummary` |
-| `GET/PUT/DELETE /api/transactions/[id]` | 更新時沒帶 `pointsDiscount` 沿用原值,帶 `null`/0 或改成非信用卡單筆支出會移除該欄位;若新舊 `billingPeriod` 不同,新舊兩個月份的彙總都會重算;刪除若該筆有 `installmentGroupId`,會把同一組所有期數一起刪除並重算受影響的每個月份 |
+| `POST /api/transactions` | 建立單筆交易(現金/信用卡單筆);信用卡單筆支出可帶 `pointsDiscount`(0 ~ amount,0/空值不存);自動用 `calculateBillingPeriod()` 算出 `billingPeriod` 並存入 |
+| `GET/PUT/DELETE /api/transactions/[id]` | 更新時沒帶 `pointsDiscount` 沿用原值,帶 `null`/0 或改成非信用卡單筆支出會移除該欄位;刪除若該筆有 `installmentGroupId`,會把同一組所有期數一起刪除 |
 | `POST /api/transactions/installment` | `{ item, date, card, totalAmount, totalNumber }`,一次生成整組分期交易,共用同一個 `installmentGroupId`;金額除不盡的餘數放在第一期,其餘各期平分 |
 
 ### 訂閱 `/api/subscriptions`
@@ -381,16 +340,8 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `GET /api/utilities` | 支援 `?year=&month=` 篩選(`/overview` 不打這支,改由 `GET /api/overview` 一次取得;保留給需要單獨讀取的情境) |
 | `POST /api/utilities` | 新增一筆 |
 | `PUT /api/utilities` | 不帶 id,依 `{ year, month }` upsert,供 `/overview` inline edit 使用,前端一律送整份資料覆寫(不含 `paid`,所以編輯金額不會洗掉繳費狀態) |
-| `PATCH /api/utilities` | `{ year, month, paid }`,只切換該月的繳費狀態;不影響金額所以不重算 `OverviewSummary`;該月還沒有資料回 404 |
-| `GET/PUT/DELETE /api/utilities/[id]` | 讀取/更新/刪除單筆,更新若 `year`/`month` 改變,新舊月份的彙總都會重算 |
-
-### 自訂項目 `/api/custom-items`
-
-| Method / 路徑 | 說明 |
-|---|---|
-| `GET /api/custom-items` | 支援 `?year=&month=` 篩選(`/overview` 不打這支,改由 `GET /api/overview` 一次取得;保留給需要單獨讀取的情境) |
-| `POST /api/custom-items` | `{ year, month, name, amount, date? }` 新增 |
-| `PUT/DELETE /api/custom-items/[id]` | 更新/刪除;PUT 沒帶 `date` 沿用原值,帶 `null` / 空字串清除 |
+| `PATCH /api/utilities` | `{ year, month, paid }`,只切換該月的繳費狀態;該月還沒有資料回 404 |
+| `GET/PUT/DELETE /api/utilities/[id]` | 讀取/更新/刪除單筆 |
 
 ### 信用卡對帳 `/api/card-reconciliations`
 
@@ -403,21 +354,20 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 
 | Method / 路徑 | 說明 |
 |---|---|
-| `GET /api/overview?period=YYYY-MM` | `/overview` 專用,把**只有總覽頁會讀**的資料一次回傳:`{ utility, customItems, cardStatuses, incomingShares }`。各欄位內容與對應的獨立 API 相同:`utility` = `GET /api/utilities?year=&month=` 的那一筆(沒有則 `null`)、`customItems` = `GET /api/custom-items?year=&month=` 的 `items`、`cardStatuses` = `GET /api/card-reconciliations?period=` 的 `statuses`、`incomingShares` = `GET /api/shares/incoming?period=` 的 `items` |
-| `GET /api/overview/year?year=YYYY` | `/overview` 年度檢視用:先補生成到期的訂閱交易,再一次查出該年 12 個月的 `OverviewSummary` 快取(沒有快取的月份才逐月走 `getOverviewSummary` 現場算並補上),回傳 `{ year, months: [{ period, income, expense, balance, cash, installment, subscription, utility, customItems, cards, sharedIncome, sharedExpense }], cards: [{ _id, name, isDebit }] }`;除了 `sharedIncome` / `sharedExpense` 都只含自己的收支。這兩個是該月別人分享給我、且**目前**勾選納入(`included`)的項目,收入與支出分開加總(同 `includedSharedTotals()`),分享者的快取一次查出整年,缺的才逐月現場算 |
+| `GET /api/overview?period=YYYY-MM` | `/overview` 專用,把**只有總覽頁會讀**的資料一次回傳:`{ utility, cardStatuses, incomingShares }`。各欄位內容與對應的獨立 API 相同:`utility` = `GET /api/utilities?year=&month=` 的那一筆(沒有則 `null`)、`cardStatuses` = `GET /api/card-reconciliations?period=` 的 `statuses`、`incomingShares` = `GET /api/shares/incoming?period=` 的 `items` |
+| `GET /api/overview/year?year=YYYY` | `/overview` 年度檢視用:先補生成到期的訂閱交易,再用 `loadMonthData()` 一次查出自己與所有「目前勾選納入」的分享者整年的原始資料,即時算出每月數字,回傳 `{ year, months: [{ period, income, expense, balance, cash, installment, subscription, utility, cards, sharedIncome, sharedExpense, sharedCash, sharedInstallment, sharedSubscription, sharedUtility }], cards: [{ _id, name, isDebit }] }`;`shared*` 以外都只含自己的收支。`shared*` 是該月別人分享給我、且**目前**勾選納入(`included`)的資料收入 / 支出與各分項加總 |
 
-> **哪些併、哪些不併**:`/overview` 每次載入只打 3 支 API——`/api/overview`、`/api/transactions?billingPeriod=`、`/api/cards`。交易和卡片在 `/income`、`/expense`、`/cards` 等其他頁面也會獨立呼叫,所以**不併進來**,維持各自的 API。上面四支被整合的 GET 仍然保留(行為不變),只是 `/overview` 不再使用;它們和 `/api/overview` 共用同一份查詢邏輯(`lib/getCardReconciliationStatuses.ts`、`lib/getIncomingShares.ts`),回傳的資料一定一致。新增、修改、刪除(POST / PUT / DELETE)一律還是打各自的 API。
+> **哪些併、哪些不併**:`/overview` 每次載入只打 3 支 API——`/api/overview`、`/api/transactions?billingPeriod=`、`/api/cards`。交易和卡片在 `/income`、`/expense`、`/cards` 等其他頁面也會獨立呼叫,所以**不併進來**,維持各自的 API。上面三支被整合的 GET 仍然保留(行為不變),只是 `/overview` 不再使用;它們和 `/api/overview` 共用同一份查詢邏輯(`lib/getCardReconciliationStatuses.ts`、`lib/getIncomingShares.ts`),回傳的資料一定一致。新增、修改、刪除(POST / PUT / DELETE)一律還是打各自的 API。
 
 ### 分享 `/api/shares`
 
 | Method / 路徑 | 說明 |
 |---|---|
-| `GET /api/shares` | 我(分享者)設定過的分享清單 |
-| `POST /api/shares` | `{ targetEmail, itemKeys: string[] }`,把一個或多個項目分享給某個 email(不能分享給自己) |
-| `PUT /api/shares` | `{ targetEmail, itemKeys: string[] }`,把我分享給某個 email 的項目整份設成 `itemKeys`:新的項目新增、不在清單裡的刪除、兩邊都有的不動(保留收件人原本的 `included`);空陣列等於取消分享給這個人的所有項目。供 `/overview` 共享明細裡「編輯項目」使用 |
-| `PUT /api/shares/[id]` | `{ included }`,僅收件人(`targetEmail` 對得上自己 email)可呼叫,決定要不要把這筆分享納入自己的收支計算 |
+| `GET /api/shares` | 我(分享者)分享給哪些 email:`{ shares: [{ _id, targetEmail }] }` |
+| `POST /api/shares` | `{ targetEmail }`,把我的收支分享給某個 email(不能分享給自己;已分享過維持原狀) |
+| `PUT /api/shares/[id]` | `{ included }`,僅收件人(`targetEmail` 對得上自己 email)可呼叫,決定要不要把這份分享納入自己的收支統計 |
 | `DELETE /api/shares/[id]` | 僅分享者(`owner`)可呼叫,取消分享 |
-| `GET /api/shares/incoming?period=` | 別人分享給我的項目,金額即時從各分享者當月的 `OverviewSummary` 讀出(沒快取才現場算並補上)(`/overview` 不打這支,改由 `GET /api/overview` 一次取得;保留給需要單獨讀取的情境) |
+| `GET /api/shares/incoming?period=` | 別人分享給我的資料(一個分享者一筆,交易已去識別化),每次從分享者當月的原始資料即時算(`/overview` 不打這支,改由 `GET /api/overview` 一次取得;保留給需要單獨讀取的情境) |
 
 ### 回饋試算 `/api/reward-plans`
 
@@ -465,18 +415,18 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 
 ### `/overview` 頁面配置(由上到下)
 
-1. **月份選擇器**:切換不同月份(對應 `billingPeriod` / Utility 的 year+month)。右邊是「月 / 年」切換鈕:切到「年」改顯示年度檢視(`components/YearOverview.tsx`,打 `GET /api/overview/year`,資料來自 `OverviewSummary` 快取),取代下面所有月度區塊與快速記帳按鈕——年份切換、統計月份區間(`components/MonthRangePicker.tsx`:按鈕(跟年份按鈕一樣是灰外框,全年或自訂區間只靠文字區分)點開 12 個月格子,第一下選起始月、第二下選結束月,另有「全年」重設;預設 1–12 月,選的區間只對當年有效,換年份回到 1–12 月;用來排除還沒開始記帳或這個月還沒記完的月份,以下所有數字、圖表、明細都只算區間內的月份,純前端過濾不重打 API)、年收入 / 年支出 / 年結餘 / 月平均支出(只除以有收支的月份)、每月收入 vs 支出長條圖(收入綠、支出紅;紅綠對色盲分辨度偏低,所以收入固定在每組左邊並搭配圖例與 tooltip 文字)、「明細表」按鈕(用 dialog 顯示每月收支結餘表與合計列,點月份切回月檢視)、各信用卡刷卡金額(標題右邊顯示所有卡合計;已刪除但當年有金額的卡顯示「已刪除的信用卡」),下面接支出分項(現金 / 分期 / 訂閱 / 房租水電 / 自訂項目 / 共享收入 / 支出),順序同月檢視。圖表標題列的共享圖示按鈕(只有 icon,放在圖例最右邊;計入時用淡靛藍色,避開圖表的收入綠 / 支出紅,分項格子的指示點也用同色)與分項裡的「共享收入 / 支出」格子是同一個開關,點任一個切換是否計入統計(預設計入,同月檢視):每個月的共享收入加進該月收入、共享支出加進該月支出,上方年度數字、長條圖、月份表都跟著變;點長條或明細表的某個月份會切回月檢視並跳到該月。檢視狀態不記憶,進頁面一律是月檢視;年檢視的年份是獨立 state,切年份不會觸發月度資料重新載入
+1. **月份選擇器**:切換不同月份(對應 `billingPeriod` / Utility 的 year+month)。右邊是「月 / 年」切換鈕:切到「年」改顯示年度檢視(`components/YearOverview.tsx`,打 `GET /api/overview/year`,每次從原始資料即時算),取代下面所有月度區塊與快速記帳按鈕——年份切換、統計月份區間(`components/MonthRangePicker.tsx`:按鈕(跟年份按鈕一樣是灰外框,全年或自訂區間只靠文字區分)點開 12 個月格子,第一下選起始月、第二下選結束月,另有「全年」重設;預設 1–12 月,選的區間只對當年有效,換年份回到 1–12 月;用來排除還沒開始記帳或這個月還沒記完的月份,以下所有數字、圖表、明細都只算區間內的月份,純前端過濾不重打 API)、年收入 / 年支出 / 年結餘 / 月平均支出(只除以有收支的月份)、每月收入 vs 支出長條圖(收入綠、支出紅;紅綠對色盲分辨度偏低,所以收入固定在每組左邊並搭配圖例與 tooltip 文字)、「明細表」按鈕(用 dialog 顯示每月收支結餘表與合計列,點月份切回月檢視)、各信用卡刷卡金額(標題右邊顯示所有卡合計;已刪除但當年有金額的卡顯示「已刪除的信用卡」),下面接支出分項(現金 / 分期 / 訂閱 / 房租水電),順序同月檢視。共享開關(`SharedToggleButton`,計入時淡靛藍色)在圖表圖例最右邊與「支出分項」標題列最右邊各一個,是同一個 state(預設計入,不跟月檢視連動):計入時每個月的共享收入加進收入、共享支出加進支出,各分項也加上共享的部分,上方年度數字、長條圖、月份表都跟著變;年收入 / 年支出 / 年結餘與各分項底下用 `components/SharedNote.tsx`(月檢視共用)標出其中共享多少(月平均支出不標)。原本的「共享收入 / 支出」格子已移除。點長條或明細表的某個月份會切回月檢視並跳到該月。檢視狀態不記憶,進頁面一律是月檢視;年檢視的年份是獨立 state,切年份不會觸發月度資料重新載入
 2. **Overview 圖表**:用 Recharts 顯示該月份的收入 vs 支出圖表,呈現該月 `billingPeriod` 底下所有交易的收支狀況
-   - **分類統計**(`components/CategoryBreakdown.tsx`,緊接在每日支出圖表下方):依交易分類加總本月收入 / 支出,每邊一個簡單圓環(中間是總額)+ 由多到少的橫條列表(分類圖示、名稱、比例條、金額、百分比),點一列導到 `/expense` 或 `/income` 並帶 `?period=&kind=`。手機和桌面都用右上角「支出 / 收入」切換(預設支出),一次只顯示一邊,圓環在桌面放大到 160px 並跟列表並排,手機改成圓環在上、列表在下;列表用 subgrid 對齊各欄,每根比例條底條一樣長;兩邊疊在同一格(沒選的 `invisible` 仍佔位),高度一律取較高的那邊,切換時卡片不會伸縮。只統計交易(前端用已抓回的當月交易現場算),不含房租水電、自訂項目與共享項目
+   - **分類統計**(`components/CategoryBreakdown.tsx`,緊接在每日支出圖表下方):依交易分類加總本月收入 / 支出,每邊一個簡單圓環(中間是總額)+ 由多到少的橫條列表(分類圖示、名稱、比例條、金額、百分比),點一列導到 `/expense` 或 `/income` 並帶 `?period=&kind=`。手機和桌面都用右上角「支出 / 收入」切換(預設支出),一次只顯示一邊,圓環在桌面放大到 160px 並跟列表並排,手機改成圓環在上、列表在下;列表用 subgrid 對齊各欄,每根比例條底條一樣長;兩邊疊在同一格(沒選的 `invisible` 仍佔位),高度一律取較高的那邊,切換時卡片不會伸縮。只統計交易(前端用已抓回的當月交易現場算,含已納入的共享交易),不含房租水電;共享交易在長條裡另外用淡靛藍色接在自己的分類色後面(圓環不分開,滑鼠移到長條上顯示自己 / 共享各多少),有共享時底下說明列會多一個顏色圖例
 3. **每日可花預算**:若使用者在 `/settings` 設定了月結算日(`specialDate`),顯示距離下次結算日還有幾天,以及「本月結餘 ÷ 剩餘天數」算出的每日可花預算(`lib/calculateDailyBudget.ts`);沒設定則改顯示提示(`components/SpecialDatePrompt.tsx`),說明這個功能並可直接在此輸入日期設定(`PATCH /api/auth/me`),設定後立刻顯示預算;右上角叉叉可關閉提示,記在 localStorage 的 `special-date-prompt-dismissed`,之後在這個瀏覽器不再顯示(仍可到 `/settings` 設定)
-4. **Row 1 — 房租電費**(`components/UtilityInlineEditor.tsx`):預覽壓成精簡的一列——標題列是本月合計、總開關、繳費標籤與編輯,底下一排四格帳單日 / 租金 / 電費 / 水費(電費水費的度數 × 單價說明放在 tooltip,沒計入統計的格子變淡加刪除線)。繳費標籤點一下在「未繳費 ↔ 已繳費」之間切換(`PATCH /api/utilities`,樂觀更新,顏色同信用卡的已繳費;手機只顯示圖示)。租金/電費/水費/總開關可個別開關是否計入統計,**點「編輯」可直接在此區塊內編輯並儲存**(inline edit,帳單日 / 租金 / 電費 / 水費各一個同格式的框);該月沒有資料時整塊收成單行:標題列右邊淡色「本月無資料」+「+ 新增」按鈕(淺色 / 深色模式都是白底,跟自訂項目的新增按鈕同樣式;點了直接進 inline 編輯)。儲存(含總開關)後直接用 `PUT /api/utilities` 回傳的資料更新本地狀態(`toUtilityDTO()` 補舊資料缺的欄位),不重新載入總覽;下方自訂項目(`components/CustomItemsEditor.tsx`,可填日期(幾號,選填),列表依日期排序、沒日期的排最後,日期顯示成「M/D」小標籤;標題列右邊的「+ 新增」按鈕另開 dialog 輸入名稱 / 金額 / 日期,新增成功後關閉;沒有項目時整塊收成單行:標題列右邊淡色「本月無資料」+「+ 新增」,有項目才展開列表並把提示換成合計)的新增 / 編輯 / 刪除、分享項目的「納入收支」儲存也一樣只更新本地狀態(分享納入只套用成功送出的變更)
+4. **Row 1 — 房租電費**(`components/UtilityInlineEditor.tsx`):預覽壓成精簡的一列——標題列是本月合計、總開關、繳費標籤與編輯,底下一排四格帳單日 / 租金 / 電費 / 水費(電費水費的度數 × 單價說明放在 tooltip,沒計入統計的格子變淡加刪除線)。繳費標籤點一下在「未繳費 ↔ 已繳費」之間切換(`PATCH /api/utilities`,樂觀更新,顏色同信用卡的已繳費;手機只顯示圖示)。租金/電費/水費/總開關可個別開關是否計入統計,**點「編輯」可直接在此區塊內編輯並儲存**(inline edit,帳單日 / 租金 / 電費 / 水費各一個同格式的框);該月沒有資料時整塊收成單行:標題列右邊淡色「本月無資料」+「+ 新增」按鈕(淺色 / 深色模式都是白底;點了直接進 inline 編輯)。儲存(含總開關)後直接用 `PUT /api/utilities` 回傳的資料更新本地狀態(`toUtilityDTO()` 補舊資料缺的欄位),不重新載入總覽;分享的「納入收支」切換也一樣只更新本地狀態(送出失敗就維持原狀)
 5. **Row 2 — 收入 / 支出簡覽**:
-   - 上方顯示該月 **Total**(收入總額、支出總額、結餘),以及現金/分期/訂閱/自訂項目/各張信用卡的分項總額
-   - 「其他」區塊的分項:現金、房租水電、自訂項目、**分期**、**訂閱**(各一格)、**共享收入 / 支出**(別人分享給我且勾選納入的項目,收入與支出分開加總後用斜線分開顯示;點一下切換是否計入上方統計,開啟時分別加進收入與支出,規則見 `includedSharedTotals()`)
+   - 上方顯示該月 **Total**(收入總額、支出總額、結餘),以及現金/分期/訂閱/各張信用卡的分項總額
+   - 「其他」區塊的分項:現金、房租水電、**分期**、**訂閱**(各一格,主數字 = 自己 + 共享,底下標「共享 $X」,見上方 Share 說明)。上方的收入 / 支出 / 結餘在計入共享時,底下同樣標出其中共享的收入 / 支出 / 結餘(`SharedNote`;結餘的共享部分可能是負數)。原本的「共享結餘」格子已移除。共享開啟時共享收入、支出分別加進上方的收入與支出,共享交易也併進每日支出圖表與分類統計,規則見 `includedSharedTotals()`。共享開關(`components/SharedToggleButton.tsx`,只有 icon,計入時淡靛藍色;沒有任何已納入的分享時不顯示)放在「其他」標題列的最右邊,每日支出與分類統計標題列的最右邊各有一個,房租水電區塊標題列最右邊也有一個(自己有資料時在「編輯」右邊,沒資料時在「新增」右邊),全部是同一個 state,控制 `OverviewClient` 的 `includeSharedInStats`(預設計入、不記憶),影響收支結餘、每日可花、每日支出圖表、分類統計與房租水電顯示。每日支出標題列右邊是「包含分期與訂閱」的圖示開關(同檔的 `InstallmentToggleButton`,循環箭頭圖示,開啟時實心深色;預設不畫分期 / 訂閱,避免單日尖峰)。原本的「自訂項目」已移除,舊資料一次性轉成分類「其他」的現金支出
    - 信用卡區塊標題右側顯示所有卡片本月刷卡金額**合計**(含分期,等於下方各卡金額加總),點擊導到 `/expense?period=&category=credit_card`
    - 每張信用卡的狀態標籤點一下依序切換:未對帳 → 已對帳 → 已繳費 → 未對帳(`/api/card-reconciliations`);簽帳金融卡沒有帳單,不顯示對帳標籤,信用卡圖示塗成紫色區分;點卡片其他地方則導到 `/expense?period=&category=credit_card&card=<cardId>`,直接看這張卡當月的明細(含分期)
    - 底下分別列出該月 income / expense 的簡易預覽,點擊可導向 `/income` 或 `/expense` 查看完整列表
-6. **分享項目**:顯示別人分享給我的項目(金額即時來自對方的月度彙總),可勾選是否納入自己的收支統計(虛擬項目,不會真的存成一筆交易;每個分享者一組,顯示已納入的收入 / 支出);也可以把自己的項目分享給其他 email;「我分享出去的項目」依 email 分組,每組可用「編輯項目」直接勾選增減分享給這個人的項目(`PUT /api/shares`),或逐項取消分享
+6. **共享參考表**(`components/SharedItemsSection.tsx`):外面只有一列入口——標題、人數摘要(「N 人分享給我 · 分享給 M 人」/「尚未共享」)與「編輯」按鈕;所有操作都在 dialog 裡:「別人分享給我」每個分享者一列(頭像、email、本月收入 / 支出、「納入」開關,切換直接送出 `PUT /api/shares/[id]`,失敗維持原狀);「我分享給」先用對照框列出「對方看得到 / 保密」的內容(`SHARED_FIELDS` / `PRIVATE_FIELDS`,跟 `getIncomingShares` 回傳的欄位一致,改一邊要一起改),再來是輸入 email 按「分享」新增(`POST /api/shares`,錯誤訊息顯示在輸入框下),下面清單逐一「取消分享」(確認後 `DELETE`)。開關元件與房租水電總開關共用 `components/Switch.tsx`
 7. **快速記帳浮動按鈕**(`components/QuickAddButton.tsx`,僅手機版 `sm:hidden`):右下角「+」按鈕,點開 dialog 切換收入/支出,直接沿用 `TransactionForm` 新增交易,新增後用 API 回應把歸屬目前月份的交易直接併進總覽的本地交易列表(總覽數字都是前端現場算的),不重新載入。信用卡清單直接用總覽已經抓回來的 `/api/cards`(不再另外打 API);總覽還沒載入完時先用 localStorage 的 `cards-cache`(`lib/cardsCache.ts`)顯示表單,最新清單回來後覆蓋並更新快取(內容沒變不寫入)。登入 / 登出 / 刪除帳號時清掉快取,避免顯示上一個帳號的卡片
 
 > 日期 / 月份選擇:全站不用原生 `<input type="date|month">`。`components/MonthPicker.tsx`(左右箭頭切月 + 中間「YYYY 年 M 月」點開年份切換與 12 個月格子,底部「本月」)、`components/DatePicker.tsx`(按鈕顯示「YYYY/MM/DD(週)」,今天會多一個「今天」標籤;點開月曆面板,今天有外框、選中實心,底部「昨天 / 今天」;交易表單用 `showDayShift` 在兩側加前一天 / 後一天箭頭)。彈出面板點外面 / 按 Esc 關閉的邏輯共用 `lib/useDismiss.ts`(`Dropdown` 也用它)。
@@ -517,10 +467,9 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
     /transactions/route.ts, /transactions/[id]/route.ts, /transactions/installment/route.ts
     /subscriptions/route.ts, /subscriptions/[id]/route.ts
     /utilities/route.ts, /utilities/[id]/route.ts
-    /custom-items/route.ts, /custom-items/[id]/route.ts
     /card-reconciliations/route.ts
     /overview/route.ts              // /overview 專用整合 API
-    /overview/year/route.ts         // /overview 年度檢視(讀 OverviewSummary 快取)
+    /overview/year/route.ts         // /overview 年度檢視(從原始資料即時算)
     /shares/route.ts, /shares/[id]/route.ts, /shares/incoming/route.ts
     /notifications/route.ts, /notifications/mark-read/route.ts
     /reward-plans/route.ts, /reward-plans/[id]/route.ts
@@ -533,11 +482,9 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   calculateDailyBudget.ts         // 月結算日倒數 + 每日可花預算
   generateSubscriptionTransactions.ts // 訂閱惰性生成交易
   summarizeMonth.ts               // 月度彙總純函式(前後端共用)
-  computeMonthSummary.ts          // 後端:查原始資料 + summarizeMonth
-  getOverviewSummary.ts           // 讀 OverviewSummary 快取,沒有就現場算並補上
-  recomputeOverviewSummary.ts     // 重算並覆寫 OverviewSummary 快取(供分享使用)
+  computeMonthSummaries.ts        // 後端:一次查多個使用者 × 多個月份的原始資料 + summarizeMonth
   getCardReconciliationStatuses.ts, getIncomingShares.ts // 獨立 API 與 /api/overview 共用的查詢
-  overviewItems.ts                // 可分享項目 key/label 對照、已納入分享項目的收入 / 支出加總(includedSharedTotals)
+  sharedTransactions.ts           // 分享資料的型別(IncomingShare / SharedTransaction)、已納入分享的收入 / 支出加總
   useIsDark.ts                    // 圖表用:目前是否深色模式
   otp.ts, email.ts                // 驗證碼產生、Resend 寄信
   theme.ts                        // 主題偏好(淺色/深色/跟隨系統)讀寫
@@ -545,21 +492,20 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   rewardPlan.ts                   // 回饋試算:計算、規則驗證、方案顏色
   security.ts, rateLimit.ts       // 驗證碼次數、寄信頻率、登入鎖定的限制與邏輯;頻率限制計數(RateLimit)
   expenseKind.ts, incomeKind.ts, transactionKind.ts // 交易分類(支出 / 收入兩組 + 共用邏輯)
-  customItemDate.ts               // 自訂項目日期(DD)驗證
   useDismiss.ts                   // 彈出面板點外面 / Esc 關閉
   cardsCache.ts                   // 快速記帳用的信用卡清單 localStorage 快取
   addMonths.ts, period.ts, usePeriod.ts, demoData.ts
   models/
     User.ts, Card.ts, Transaction.ts, Subscription.ts, Utility.ts,
-    CustomItem.ts, CardReconciliation.ts, OverviewSummary.ts, Share.ts, Notification.ts, RewardPlan.ts, RateLimit.ts
+    CardReconciliation.ts, Share.ts, Notification.ts, RewardPlan.ts, RateLimit.ts
 /components
   Navbar.tsx, ThemeToggle.tsx, MonthPicker.tsx, OverviewChart.tsx, OverviewClient.tsx
   TransactionForm.tsx, TransactionsClient.tsx, ExpenseClient.tsx
-  CardForm.tsx, UtilityInlineEditor.tsx, CustomItemsEditor.tsx
+  CardForm.tsx, UtilityInlineEditor.tsx
   SubscriptionForm.tsx, SubscriptionsClient.tsx
   RewardCalculator.tsx, CategoryBreakdown.tsx, KindIcon.tsx, KindPicker.tsx, Dropdown.tsx, dropdownOptions.tsx, DatePicker.tsx, BottomNav.tsx,
   SpecialDatePrompt.tsx, YearOverview.tsx, MonthRangePicker.tsx
-  ShareForm.tsx, SharedItemsSection.tsx, QuickAddButton.tsx, RoundedAmount.tsx, AddToHomeScreenGuide.tsx
+  SharedItemsSection.tsx, SharedNote.tsx, Switch.tsx, SharedToggleButton.tsx, QuickAddButton.tsx, RoundedAmount.tsx, AddToHomeScreenGuide.tsx
   NotificationBell.tsx, AdminNotificationClient.tsx, AdminStatsSection.tsx, AdminUsersClient.tsx, Logo.tsx, ThemeSettings.tsx
   SettingsClient.tsx, SpecialDateForm.tsx, ChangePasswordForm.tsx, DeleteAccountForm.tsx
   ForgotPasswordForm.tsx, VerifyEmailForm.tsx

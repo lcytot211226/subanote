@@ -4,7 +4,6 @@ import Transaction from "@/lib/models/Transaction";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
-import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { parsePointsDiscount } from "@/lib/pointsDiscount";
 import { DEFAULT_KIND, isKindFor } from "@/lib/transactionKind";
 
@@ -103,17 +102,12 @@ export async function PUT(request: Request, { params }: Context) {
     { new: true, runValidators: true }
   ).populate("card");
 
-  // 同一組分期共用同一個分類:改其中一期的分類,其他期數跟著改(其他期數的金額等欄位不動,彙總也不受影響)
+  // 同一組分期共用同一個分類:改其中一期的分類,其他期數跟著改(其他期數的金額等欄位不動)
   if (finalGroupId) {
     await Transaction.updateMany(
       { user: auth.userId, installmentGroupId: finalGroupId, _id: { $ne: id } },
       { kind: finalKind }
     );
-  }
-
-  await recomputeOverviewSummary(auth.userId, billingPeriod);
-  if (existing.billingPeriod !== billingPeriod) {
-    await recomputeOverviewSummary(auth.userId, existing.billingPeriod);
   }
 
   return NextResponse.json({ transaction });
@@ -134,22 +128,13 @@ export async function DELETE(_request: Request, { params }: Context) {
 
   // 分期交易(有 installmentGroupId)刪除時,同一組的所有期數要一起刪掉。
   if (existing.installmentGroupId) {
-    const group = await Transaction.find({
-      user: auth.userId,
-      installmentGroupId: existing.installmentGroupId,
-    });
-    const periods = new Set(group.map((t) => t.billingPeriod));
     const result = await Transaction.deleteMany({
       user: auth.userId,
       installmentGroupId: existing.installmentGroupId,
     });
-    for (const period of periods) {
-      await recomputeOverviewSummary(auth.userId, period);
-    }
     return NextResponse.json({ success: true, deletedCount: result.deletedCount });
   }
 
   await Transaction.deleteOne({ _id: id, user: auth.userId });
-  await recomputeOverviewSummary(auth.userId, existing.billingPeriod);
   return NextResponse.json({ success: true, deletedCount: 1 });
 }

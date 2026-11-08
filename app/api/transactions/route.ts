@@ -5,7 +5,6 @@ import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { generateDueSubscriptionTransactions } from "@/lib/generateSubscriptionTransactions";
-import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { parsePointsDiscount } from "@/lib/pointsDiscount";
 import { DEFAULT_KIND, isKindFor } from "@/lib/transactionKind";
 
@@ -94,8 +93,6 @@ export async function POST(request: Request) {
     posted: isPosted,
     billingPeriod,
   });
-
-  await recomputeOverviewSummary(auth.userId, billingPeriod);
 
   return NextResponse.json({ transaction }, { status: 201 });
 }

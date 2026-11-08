@@ -50,10 +50,7 @@ export const DEMO_RENT = 15000;
 export const DEMO_ELEC_COST = 1760;
 export const DEMO_WATER_COST = 180;
 export const DEMO_UTILITY_COST = DEMO_RENT + DEMO_ELEC_COST + DEMO_WATER_COST;
-export const DEMO_CUSTOM_ITEMS = [{ name: "孝親費", amount: 3000 }];
-export const DEMO_CUSTOM_ITEMS_TOTAL = DEMO_CUSTOM_ITEMS.reduce((sum, i) => sum + i.amount, 0);
-
-export const DEMO_TOTAL_EXPENSE = DEMO_EXPENSE_TOTAL + DEMO_UTILITY_COST + DEMO_CUSTOM_ITEMS_TOTAL;
+export const DEMO_TOTAL_EXPENSE = DEMO_EXPENSE_TOTAL + DEMO_UTILITY_COST;
 
 export const DEMO_INCOME_PREVIEW = [{ date: "09/05", payment: "現金", item: "薪水", amount: 45000 }];
 

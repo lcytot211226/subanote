@@ -3,6 +3,9 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { calculateMeterCost, calculateMeterCostExact, type MeterInfo } from "@/lib/calculateMeterCost";
 import RoundedAmount from "./RoundedAmount";
+import Switch from "./Switch";
+import SharedToggleButton from "./SharedToggleButton";
+import type { SharedUtilityParts } from "@/lib/sharedTransactions";
 import { BanknotesIcon, BoltIcon, CalendarDaysIcon, ClockIcon, HomeIcon, PlusIcon, WaterDropIcon } from "./icons";
 
 export type UtilityDTO = {
@@ -117,40 +120,6 @@ function NumberField({
   );
 }
 
-function Switch({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  label?: string;
-}) {
-  return (
-    <label className={`flex items-center gap-2 text-sm ${disabled ? "opacity-50" : "cursor-pointer"}`}>
-      {label && <span className="whitespace-nowrap text-zinc-600 dark:text-zinc-300">{label}</span>}
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:cursor-not-allowed ${
-          checked ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
-        }`}
-      >
-        <span
-          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
-            checked ? "translate-x-[18px]" : "translate-x-1"
-          }`}
-        />
-      </button>
-    </label>
-  );
-}
-
 function IconBadge({ tint, children }: { tint: string; children: ReactNode }) {
   return (
     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${tint}`}>{children}</span>
@@ -171,25 +140,33 @@ function Tile({
   value,
   enabled = true,
   title,
+  sharedAmount = 0,
 }: {
   icon: ReactNode;
   name: string;
   value: ReactNode;
   enabled?: boolean;
   title?: string;
+  /** value 裡含有多少是共享的;> 0 時在底下標「共享 $X」 */
+  sharedAmount?: number;
 }) {
   return (
     <div
       title={title ?? (enabled ? undefined : `${name}未計入統計`)}
-      className={`min-w-0 rounded-md border border-zinc-200 px-2 py-2 text-center transition-opacity dark:border-zinc-800 ${enabled ? "" : "opacity-40"}`}
+      className={`min-w-0 rounded-md border border-zinc-200 px-1 py-2.5 text-center transition-opacity sm:px-2 sm:py-3 dark:border-zinc-800 ${enabled ? "" : "opacity-40"}`}
     >
-      <p className="flex items-center justify-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="flex items-center justify-center gap-1 text-xs text-zinc-500 sm:text-sm dark:text-zinc-400">
         {icon}
         <span className="truncate">{name}</span>
       </p>
-      <p className={`truncate text-sm font-medium text-zinc-900 dark:text-zinc-50 ${enabled ? "" : "line-through"}`}>
+      <p className={`mt-0.5 truncate text-base font-semibold tabular-nums text-zinc-900 sm:text-lg dark:text-zinc-50 ${enabled ? "" : "line-through"}`}>
         {value}
       </p>
+      {sharedAmount > 0 && (
+        <p className="truncate text-xs tabular-nums text-indigo-500 dark:text-indigo-400">
+          共享 ${Math.round(sharedAmount).toLocaleString()}
+        </p>
+      )}
     </div>
   );
 }
@@ -330,11 +307,17 @@ export default function UtilityInlineEditor({
   loading,
   onSaved,
   onPaidChange,
+  shared,
 }: {
   year: number;
   month: number;
   utility: UtilityDTO | null;
   loading: boolean;
+  /**
+   * 有已納入的分享時才傳:parts 是分享者當月計入統計的房租水電(共享開關關閉時為 null),
+   * 每格與合計都顯示「自己 + 共享」的加總,底下標「共享 $X」;on / onToggle 是共享開關(跟總覽其他共享開關同一個),放在標題列最右邊。
+   */
+  shared?: { parts: SharedUtilityParts | null; on: boolean; onToggle: () => void };
   /** 儲存成功後帶入 API 回傳的最新資料,外層直接更新本地狀態,不重新載入整個總覽。 */
   onSaved: (utility: UtilityDTO) => void;
   /** 繳費狀態切換後通知外層更新本地資料(不重新載入整個總覽,跟信用卡對帳標籤一樣即時反應)。 */
@@ -430,6 +413,50 @@ export default function UtilityInlineEditor({
     </div>
   );
 
+  const sharedParts = shared?.parts ?? null;
+  const sharedTotal = sharedParts?.total ?? 0;
+  const sharedButton = shared && <SharedToggleButton on={shared.on} onToggle={shared.onToggle} />;
+
+  /**
+   * 帳單日 / 租金 / 電費 / 水費四格:每格 = 自己 + 共享,底下標共享多少。
+   * 自己沒資料時(own = null)就只有共享的部分;自己的項目沒計入統計、又沒有共享金額時才變淡加刪除線。
+   */
+  const tilesGrid = (own: UtilityDTO | null) => {
+    const dim = !!own && !own.enabled && sharedTotal === 0;
+    return (
+      <div className={`mt-3 grid grid-cols-4 gap-2 transition-opacity ${dim ? "opacity-40" : ""}`}>
+        <Tile
+          icon={<CalendarDaysIcon className="h-4 w-4 shrink-0" />}
+          name="帳單日"
+          value={`${own?.date ?? sharedParts?.date ?? "-"} 號`}
+        />
+        <Tile
+          icon={<HomeIcon className="h-4 w-4 shrink-0 text-violet-500 dark:text-violet-400" />}
+          name="租金"
+          value={`$${((own?.rent ?? 0) + (sharedParts?.rent ?? 0)).toLocaleString()}`}
+          enabled={!own || own.rentEnabled || (sharedParts?.rent ?? 0) > 0}
+          sharedAmount={sharedParts?.rent}
+        />
+        {(["elec", "water"] as const).map((field) => {
+          const label = METER_LABEL[field];
+          const ownEnabled = own ? (field === "elec" ? own.elecEnabled : own.waterEnabled) : true;
+          const sharedPart = sharedParts?.[field] ?? 0;
+          return (
+            <Tile
+              key={field}
+              icon={<label.Icon className={`h-4 w-4 shrink-0 ${label.iconColor}`} />}
+              name={label.name}
+              value={<RoundedAmount value={(own ? calculateMeterCostExact(own[field]) : 0) + sharedPart} />}
+              enabled={ownEnabled || sharedPart > 0}
+              title={own ? `${meterDetail(own[field])}${ownEnabled ? "" : "(未計入統計)"}` : undefined}
+              sharedAmount={sharedPart}
+            />
+          );
+        })}
+      </div>
+    );
+  };
+
   if (!editing) {
     // 還不知道這個月到底有沒有資料時,顯示骨架畫面,不要用 emptyUtility 的 0 冒充「沒有資料」,
     // 避免使用者看到「一下有資料、一下沒資料」的閃爍。
@@ -439,9 +466,9 @@ export default function UtilityInlineEditor({
           {header()}
           <div className="mt-3 grid grid-cols-4 gap-2">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-2 dark:border-zinc-800">
-                <div className="h-3 w-10 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-                <div className="h-4 w-14 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              <div key={i} className="flex flex-col items-center gap-1.5 rounded-md border border-zinc-200 px-1 py-2.5 sm:px-2 sm:py-3 dark:border-zinc-800">
+                <div className="h-4 w-10 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                <div className="h-6 w-14 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
               </div>
             ))}
           </div>
@@ -450,20 +477,54 @@ export default function UtilityInlineEditor({
     }
 
     if (!utility) {
-      // 空狀態收成單行:只留標題列,右邊淡色提示 +「新增」(樣式同自訂項目的新增按鈕)
+      const addButton = (
+        <button
+          type="button"
+          onClick={startEdit}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          <PlusIcon className="h-4 w-4" />
+          新增
+        </button>
+      );
+
+      // 自己沒資料、但有已納入的共享房租水電:版面跟自己有資料時一樣(標題旁合計 + 四格),
+      // 只是唯讀(沒有總開關 / 繳費 / 編輯),右邊的「新增」仍可建立自己的資料
+      if (sharedParts) {
+        return (
+          <div
+            className={`rounded-lg border border-zinc-200 bg-white p-4 transition-opacity dark:border-zinc-800 dark:bg-zinc-900 ${loading ? "opacity-60" : ""}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-baseline gap-2">
+                <h2 className="flex items-center gap-2 self-center whitespace-nowrap font-medium text-zinc-900 dark:text-zinc-50">
+                  <HomeIcon className="h-5 w-5 shrink-0 text-zinc-500 dark:text-zinc-400" />
+                  房租水電費
+                </h2>
+                <span className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
+                  ${sharedTotal.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {addButton}
+                {sharedButton}
+              </div>
+            </div>
+            {tilesGrid(null)}
+          </div>
+        );
+      }
+
+      // 空狀態收成單行:只留標題列,右邊淡色提示 +「新增」
       return (
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           {header(
             <div className="flex shrink-0 items-center gap-3">
               <span className="text-sm text-zinc-400 dark:text-zinc-500">本月無資料</span>
-              <button
-                type="button"
-                onClick={startEdit}
-                className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-              >
-                <PlusIcon className="h-4 w-4" />
-                新增
-              </button>
+              <div className="flex items-center gap-2">
+                {addButton}
+                {sharedButton}
+              </div>
             </div>
           )}
         </div>
@@ -472,7 +533,10 @@ export default function UtilityInlineEditor({
 
     const display = utility;
     // 總開關關掉時,金額改成刪除線、整列變暗,但租金/電費/水費原本的數字跟各自開關狀態都還在,不會被清空。
-    const totalCost = subtotalOf(display);
+    // 有共享時合計 = 自己計入的部分 + 共享,就不用刪除線了。
+    const ownCost = subtotalOf(display);
+    const totalCost = sharedTotal > 0 ? (display.enabled ? ownCost : 0) + sharedTotal : ownCost;
+    const totalStruck = !display.enabled && sharedTotal === 0;
 
     return (
       <div
@@ -485,7 +549,7 @@ export default function UtilityInlineEditor({
               房租水電費
             </h2>
             <span
-              className={`truncate text-sm font-semibold ${display.enabled ? "text-zinc-900 dark:text-zinc-50" : "text-zinc-400 line-through dark:text-zinc-500"}`}
+              className={`truncate text-base font-semibold ${totalStruck ? "text-zinc-400 line-through dark:text-zinc-500" : "text-zinc-900 dark:text-zinc-50"}`}
             >
               ${totalCost.toLocaleString()}
             </span>
@@ -502,36 +566,11 @@ export default function UtilityInlineEditor({
             >
               編輯
             </button>
+            {sharedButton}
           </div>
         </div>
 
-        <div className={`mt-3 grid grid-cols-4 gap-2 transition-opacity ${display.enabled ? "" : "opacity-40"}`}>
-          <Tile
-            icon={<CalendarDaysIcon className="h-3.5 w-3.5 shrink-0" />}
-            name="帳單日"
-            value={`${display.date} 號`}
-          />
-          <Tile
-            icon={<HomeIcon className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" />}
-            name="租金"
-            value={`$${display.rent.toLocaleString()}`}
-            enabled={display.rentEnabled}
-          />
-          {(["elec", "water"] as const).map((field) => {
-            const label = METER_LABEL[field];
-            const enabled = field === "elec" ? display.elecEnabled : display.waterEnabled;
-            return (
-              <Tile
-                key={field}
-                icon={<label.Icon className={`h-3.5 w-3.5 shrink-0 ${label.iconColor}`} />}
-                name={label.name}
-                value={<RoundedAmount value={calculateMeterCostExact(display[field])} />}
-                enabled={enabled}
-                title={`${meterDetail(display[field])}${enabled ? "" : "(未計入統計)"}`}
-              />
-            );
-          })}
-        </div>
+        {tilesGrid(display)}
       </div>
     );
   }

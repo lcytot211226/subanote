@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ComponentType } from "react";
 import Link from "next/link";
 import MonthPicker from "./MonthPicker";
 import OverviewChart, { type DailyExpense } from "./OverviewChart";
@@ -8,13 +8,19 @@ import CategoryBreakdown from "./CategoryBreakdown";
 import QuickAddButton from "./QuickAddButton";
 import YearOverview from "./YearOverview";
 import UtilityInlineEditor, { toUtilityDTO, type UtilityDTO } from "./UtilityInlineEditor";
-import CustomItemsEditor, { type CustomItemDTO } from "./CustomItemsEditor";
 import SpecialDatePrompt from "./SpecialDatePrompt";
-import SharedItemsSection, { type IncomingShareDTO } from "./SharedItemsSection";
+import SharedItemsSection from "./SharedItemsSection";
+import SharedNote from "./SharedNote";
+import SharedToggleButton, { InstallmentToggleButton } from "./SharedToggleButton";
 import type { TransactionDTO } from "./TransactionsClient";
 import { usePeriod } from "@/lib/usePeriod";
 import { calculateDailyBudget, daysUntilSpecialDate } from "@/lib/calculateDailyBudget";
-import { includedSharedTotals } from "@/lib/overviewItems";
+import {
+  includedSharedTotals,
+  sharedUtilityParts,
+  SHARED_ITEM_LABEL,
+  type IncomingShare,
+} from "@/lib/sharedTransactions";
 import { summarizeMonth } from "@/lib/summarizeMonth";
 import type { CardDTO } from "./CardForm";
 import { useToast } from "./ToastProvider";
@@ -34,8 +40,6 @@ import {
   HomeIcon,
   QuestionMarkCircleIcon,
   ScaleIcon,
-  TagIcon,
-  UserGroupIcon,
 } from "./icons";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -72,25 +76,48 @@ async function readJson(res: Response): Promise<any> {
   }
 }
 
+/** 「其他」區塊的統計格子:主數字 = 自己 + 共享,有共享時底下標「共享 $X」(同房租水電區塊)。 */
+function StatTile({
+  Icon,
+  label,
+  own,
+  shared,
+}: {
+  Icon: ComponentType<{ className?: string }>;
+  label: string;
+  own: number;
+  shared: number;
+}) {
+  return (
+    <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
+      <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <Icon className="h-4 w-4" />
+        {label}
+      </p>
+      <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${(own + shared).toLocaleString()}</p>
+      <SharedNote amount={shared} />
+    </div>
+  );
+}
+
 export default function OverviewClient() {
   const { period, setPeriod, ready } = usePeriod();
   const { showLoading, dismiss } = useToast();
   const [utility, setUtility] = useState<UtilityDTO | null>(null);
-  const [customItems, setCustomItems] = useState<CustomItemDTO[]>([]);
   const [transactions, setTransactions] = useState<TransactionDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [specialDate, setSpecialDate] = useState<number | null>(null);
   // /api/auth/me 回來前不知道有沒有設定,先什麼都不顯示,避免設定提示閃一下
   const [specialDateLoaded, setSpecialDateLoaded] = useState(false);
   const [showInstallmentInChart, setShowInstallmentInChart] = useState(false);
-  // 共享總額是否要實際計入上方收入/支出/結餘統計,讓使用者自己決定,預設納入。
+  // 已納入(included)的共享資料是否要實際計入統計(收入/支出/結餘、每日支出、分類統計),預設納入。
   const [includeSharedInStats, setIncludeSharedInStats] = useState(true);
   // 各卡本月對帳進度,沒出現在裡面的卡 = 未對帳
   const [cardStatuses, setCardStatuses] = useState<Record<string, CardReconciliationStatus>>({});
   const [cards, setCards] = useState<CardDTO[]>([]);
   // 第一次載入完成前,快速記帳先用 localStorage 快取的卡片清單
   const [cardsLoaded, setCardsLoaded] = useState(false);
-  const [incomingShares, setIncomingShares] = useState<IncomingShareDTO[]>([]);
+  const [incomingShares, setIncomingShares] = useState<IncomingShare[]>([]);
   // 月 / 年檢視切換;年檢視看的年份獨立於 period,切年份不會觸發月檢視重新載入
   const [view, setView] = useState<"month" | "year">("month");
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
@@ -110,7 +137,7 @@ export default function OverviewClient() {
     setLoading(true);
     const toastId = showLoading("資料載入中…");
     try {
-      // 總覽專用的資料(房租水電 / 自訂項目 / 對帳狀態 / 別人分享給我的項目)由 /api/overview 一次拿;
+      // 總覽專用的資料(房租水電 / 對帳狀態 / 別人分享給我的資料)由 /api/overview 一次拿;
       // 交易與卡片其他頁面也會獨立使用,維持各自的 API。
       const [overviewRes, transactionsRes, cardsRes] = await Promise.all([
         fetch(`/api/overview?period=${period}`),
@@ -123,7 +150,6 @@ export default function OverviewClient() {
       const cardsData = await readJson(cardsRes);
 
       setUtility(overviewData.utility ? toUtilityDTO(overviewData.utility) : null);
-      setCustomItems(overviewData.customItems ?? []);
       setTransactions(transactionsData.transactions ?? []);
       setCardStatuses(overviewData.cardStatuses ?? {});
       if (cardsRes.ok) {
@@ -185,13 +211,11 @@ export default function OverviewClient() {
       cardId: t.card?._id ?? null,
     })),
     utility,
-    customItems,
   });
   const cashTotal = summary.cash;
   const installmentTotal = summary.installment;
   const subscriptionTotal = summary.subscription;
   const utilityCost = summary.utility;
-  const customItemsTotal = summary.customItems;
   // 每張卡都列出來,這個月完全沒刷卡的卡顯示 $0
   const cardTotalById = new Map(summary.cards.map((c) => [c.card, c.total]));
   const cardBreakdown = cards.map((c) => ({
@@ -201,14 +225,35 @@ export default function OverviewClient() {
     total: cardTotalById.get(c._id) ?? 0,
   }));
   const cardsTotal = cardBreakdown.reduce((sum, c) => sum + c.total, 0);
-  // 別人分享給我、且我選擇納入的項目,只在這裡虛擬加總,不會動到分享者原本的資料。
-  // 收入與支出分開加:收入項目加進收入、開銷類加進支出,結餘則是分享者的收入和支出都抓(規則見 includedSharedTotals)。
-  const sharedTotals = includedSharedTotals(incomingShares.map((s) => ({ ...s, owner: s.ownerEmail })));
+  // 別人分享給我、且我選擇納入的資料,只在這裡虛擬加總,不會動到分享者原本的資料。
+  // 收入加進收入、支出(含對方的房租水電)加進支出;交易另外併進每日支出圖表與分類統計。
+  const sharedTotals = includedSharedTotals(incomingShares);
+  const sharedTransactions = includeSharedInStats
+    ? incomingShares.filter((s) => s.included).flatMap((s) => s.transactions)
+    : [];
+  const sharedExpenseList = sharedTransactions.filter((t) => t.type === "expense");
+  // 共享開關在「其他」標題列、每日支出、分類統計(與自己沒資料時的房租水電)都有,是同一個 state;沒有任何已納入的分享時不顯示
+  const hasIncludedShares = incomingShares.some((s) => s.included);
+  // 分享者的房租水電(已算在共享支出裡):房租水電區塊與「其他」的統計格子都顯示「自己 + 共享」,底下標共享多少
+  const sharedUtility = includeSharedInStats
+    ? sharedUtilityParts(incomingShares.filter((s) => s.included && s.utilityDetail).map((s) => s.utilityDetail!))
+    : null;
+  const toggleShared = () => setIncludeSharedInStats((prev) => !prev);
+  // 「其他」統計格子的共享部分,分類方式同 summarizeMonth(現金 = 付款方式現金、分期、訂閱 = 訂閱生成)
+  const sumAmount = (list: { amount: number }[]) => list.reduce((sum, t) => sum + t.amount, 0);
+  const sharedBreakdown = {
+    cash: sumAmount(sharedExpenseList.filter((t) => t.category === "cash")),
+    installment: sumAmount(sharedExpenseList.filter((t) => t.category === "installment")),
+    subscription: sumAmount(sharedExpenseList.filter((t) => t.isSubscription)),
+    utility: sharedUtility?.total ?? 0,
+  };
   const sharedIncomeAdjustment = includeSharedInStats ? sharedTotals.income : 0;
   const sharedExpenseAdjustment = includeSharedInStats ? sharedTotals.expense : 0;
   const incomeTotal = summary.income + sharedIncomeAdjustment;
   const totalExpense = summary.expense + sharedExpenseAdjustment;
   const balance = incomeTotal - totalExpense;
+  // 結餘的共享部分可能是 0 或負數,只要有計入共享收支就標
+  const hasSharedAdjustment = sharedIncomeAdjustment !== 0 || sharedExpenseAdjustment !== 0;
 
   const remainingDays = specialDate != null ? daysUntilSpecialDate(specialDate, new Date())+1 : null;
   const dailyBudget =
@@ -234,8 +279,21 @@ export default function OverviewClient() {
     items.push({ item: t.item, amount: netAmount(t) });
     expenseItemsByDate.set(key, items);
   }
+  // 共享交易沒有品項名稱,同一天的合併成一筆「共享項目」;分期 / 訂閱的過濾規則跟自己的交易一樣
+  const sharedByDate = new Map<string, number>();
+  for (const t of sharedExpenseList) {
+    if (!showInstallmentInChart && (t.category === "installment" || t.isSubscription)) continue;
+    const key = t.date.slice(0, 10);
+    sharedByDate.set(key, (sharedByDate.get(key) ?? 0) + t.amount);
+  }
+  for (const [key, amount] of sharedByDate) {
+    expenseByDate.set(key, (expenseByDate.get(key) ?? 0) + amount);
+    const items = expenseItemsByDate.get(key) ?? [];
+    items.push({ item: SHARED_ITEM_LABEL, amount });
+    expenseItemsByDate.set(key, items);
+  }
   const sortedDateKeys = Array.from(
-    new Set(expenseList.map((t) => t.date.slice(0, 10)))
+    new Set([...expenseList, ...sharedExpenseList].map((t) => t.date.slice(0, 10)))
   ).sort();
   const rangeStart =
     sortedDateKeys.length > 0 ? parseISODateToUTC(sortedDateKeys[0]) : Date.UTC(year, month - 1, 1);
@@ -313,22 +371,23 @@ export default function OverviewClient() {
             <ChartBarIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
             {period} 每日支出
           </h2>
-          <button
-            type="button"
-            onClick={() => setShowInstallmentInChart((prev) => !prev)}
-            className={`rounded-md border px-3 py-1 text-xs font-medium ${
-              showInstallmentInChart
-                ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
-            }`}
-          >
-            {showInstallmentInChart ? "已包含分期訂閱" : "包含分期訂閱"}
-          </button>
+          <div className="flex items-center gap-2">
+            <InstallmentToggleButton
+              on={showInstallmentInChart}
+              onToggle={() => setShowInstallmentInChart((prev) => !prev)}
+            />
+            {hasIncludedShares && <SharedToggleButton on={includeSharedInStats} onToggle={toggleShared} />}
+          </div>
         </div>
         <OverviewChart dailyExpense={dailyExpense} />
       </div>
 
-      <CategoryBreakdown transactions={transactions} period={period} loading={loading} />
+      <CategoryBreakdown
+        transactions={[...transactions, ...sharedTransactions.map((t) => ({ ...t, shared: true }))]}
+        period={period}
+        loading={loading}
+        shared={hasIncludedShares ? { on: includeSharedInStats, onToggle: toggleShared } : undefined}
+      />
 
       <UtilityInlineEditor
         year={year}
@@ -337,10 +396,9 @@ export default function OverviewClient() {
         loading={loading}
         onSaved={setUtility}
         onPaidChange={(paid) => setUtility((prev) => (prev ? { ...prev, paid } : prev))}
+        shared={hasIncludedShares ? { parts: sharedUtility, on: includeSharedInStats, onToggle: toggleShared } : undefined}
       />
 
-      
-      <CustomItemsEditor year={year} month={month} items={customItems} loading={loading} onSaved={setCustomItems} />
 
       <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4 grid grid-cols-3 gap-4 text-center">
@@ -350,6 +408,7 @@ export default function OverviewClient() {
               收入
             </p>
             <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${incomeTotal.toLocaleString()}</p>
+            <SharedNote amount={sharedIncomeAdjustment} />
           </div>
           <div>
             <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -357,6 +416,7 @@ export default function OverviewClient() {
               支出
             </p>
             <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${totalExpense.toLocaleString()}</p>
+            <SharedNote amount={sharedExpenseAdjustment} />
           </div>
           <div>
             <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -364,6 +424,7 @@ export default function OverviewClient() {
               結餘
             </p>
             <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${balance.toLocaleString()}</p>
+            <SharedNote amount={sharedIncomeAdjustment - sharedExpenseAdjustment} show={hasSharedAdjustment} />
           </div>
         </div>
         {showDailyBudget && (
@@ -480,64 +541,18 @@ export default function OverviewClient() {
           </>
         )}
 
-        <h3 className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          其他
-        </h3>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 dark:text-zinc-400">其他</h3>
+          {/* 共享開關:影響上方收支結餘、每日可花、下面各格的共享標示、每日支出圖表與分類統計 */}
+          {hasIncludedShares && (
+            <SharedToggleButton on={includeSharedInStats} onToggle={toggleShared} />
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <BanknotesIcon className="h-4 w-4" />
-              現金開銷
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${cashTotal.toLocaleString()}</p>
-          </div>
-          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <HomeIcon className="h-4 w-4" />
-              房租水電總開銷
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${utilityCost.toLocaleString()}</p>
-          </div>
-          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <TagIcon className="h-4 w-4" />
-              自訂項目總開銷
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${customItemsTotal.toLocaleString()}</p>
-          </div>
-          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <CalendarDaysIcon className="h-4 w-4" />
-              分期
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${installmentTotal.toLocaleString()}</p>
-          </div>
-          <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <ArrowPathIcon className="h-4 w-4" />
-              訂閱
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">${subscriptionTotal.toLocaleString()}</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIncludeSharedInStats((prev) => !prev)}
-            title="點擊切換是否計入上方統計:別人分享給我、且勾選納入的項目,收入 / 支出分開合計(結餘 = 對方的收入和支出都算),不會實際存成一筆交易。開啟時分別加進上方的收入與支出。"
-            className="relative w-full rounded-md border border-dashed border-zinc-300 p-3 text-center dark:border-zinc-700"
-          >
-            <span
-              className={`absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full ${
-                includeSharedInStats ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
-              }`}
-            />
-            <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-              <UserGroupIcon className="h-4 w-4" />
-              共享收入 / 支出
-            </p>
-            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              ${sharedTotals.income.toLocaleString()} / ${sharedTotals.expense.toLocaleString()}
-            </p>
-          </button>
+          <StatTile Icon={BanknotesIcon} label="現金開銷" own={cashTotal} shared={sharedBreakdown.cash} />
+          <StatTile Icon={HomeIcon} label="房租水電總開銷" own={utilityCost} shared={sharedBreakdown.utility} />
+          <StatTile Icon={CalendarDaysIcon} label="分期" own={installmentTotal} shared={sharedBreakdown.installment} />
+          <StatTile Icon={ArrowPathIcon} label="訂閱" own={subscriptionTotal} shared={sharedBreakdown.subscription} />
         </div>
       </div>
       <SharedItemsSection incomingItems={incomingShares} loading={loading} onIncomingChanged={setIncomingShares} />

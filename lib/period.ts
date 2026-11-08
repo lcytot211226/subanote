@@ -12,3 +12,7 @@ export function formatPeriodLabel(period: string): string {
   const [year, month] = period.split("-");
   return `${year.slice(2)}/${month}`;
 }
+
+export function formatPeriod(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}

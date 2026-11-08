@@ -18,12 +18,21 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
+    let res: Response;
+    let data: { error?: string; needsVerification?: boolean; email?: string };
+    try {
+      res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      // 伺服器錯誤時可能回空 body,不能直接 res.json()
+      data = await res.json().catch(() => ({}));
+    } catch {
+      setLoading(false);
+      setError("無法連線到伺服器,請稍後再試");
+      return;
+    }
 
     setLoading(false);
     if (!res.ok) {

@@ -2,8 +2,8 @@ import { calculateMeterCost, type MeterInfo } from "@/lib/calculateMeterCost";
 
 /**
  * 某使用者某個 billingPeriod 的收支彙總計算。純函式、不碰資料庫,前後端共用同一份邏輯:
- * - 前端 /overview 用已經抓回來的當月原始資料直接算(不讀快取)
- * - 後端 recomputeOverviewSummary 查完原始資料後用它算,再寫進 OverviewSummary 快取給分享使用
+ * - 前端 /overview 月檢視用已經抓回來的當月原始資料直接算
+ * - 後端 lib/computeMonthSummaries.ts 查原始資料後用它算(年度檢視、別人分享給我的資料)
  */
 
 export type SummaryTransaction = {
@@ -29,12 +29,11 @@ export type SummaryUtility = {
 
 export type MonthSummary = {
   income: number;
-  expense: number; // 交易支出 + 房租水電 + 自訂項目
+  expense: number; // 交易支出 + 房租水電
   cash: number;
   installment: number;
   subscription: number;
   utility: number;
-  customItems: number;
   balance: number; // income - expense
   /** 每張有刷卡紀錄的卡當月總額(沒刷卡的卡不會出現,需要 $0 的話由呼叫端自己補) */
   cards: { card: string; total: number }[];
@@ -61,11 +60,9 @@ function sum(amounts: number[]): number {
 export function summarizeMonth({
   transactions,
   utility,
-  customItems,
 }: {
   transactions: SummaryTransaction[];
   utility: SummaryUtility | null;
-  customItems: { amount: number }[];
 }): MonthSummary {
   const incomeList = transactions.filter((t) => t.type === "income");
   const expenseList = transactions.filter((t) => t.type === "expense");
@@ -90,9 +87,7 @@ export function summarizeMonth({
   // 但不會改動也不會清空租金/電費/水費各自存的開關狀態,重新打開總開關後會照原樣恢復。
   const utilityCost = utility?.enabled !== false ? rentCost + elecCost + waterCost : 0;
 
-  const customItemsTotal = sum(customItems.map((item) => item.amount));
-
-  const expense = expenseTotal + utilityCost + customItemsTotal;
+  const expense = expenseTotal + utilityCost;
 
   return {
     income: safeNumber(income),
@@ -101,7 +96,6 @@ export function summarizeMonth({
     installment: safeNumber(installment),
     subscription: safeNumber(subscription),
     utility: safeNumber(utilityCost),
-    customItems: safeNumber(customItemsTotal),
     balance: safeNumber(income - expense),
     cards: Array.from(cardTotals, ([card, total]) => ({ card, total: safeNumber(total) })),
   };

@@ -6,6 +6,8 @@ import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import { useIsDark } from "@/lib/useIsDark";
 import Modal from "./Modal";
+import SharedToggleButton from "./SharedToggleButton";
+import SharedNote from "./SharedNote";
 import MonthRangePicker, { FULL_YEAR, type MonthRange } from "./MonthRangePicker";
 import {
   ArrowDownCircleIcon,
@@ -18,8 +20,6 @@ import {
   ListIcon,
   HomeIcon,
   ScaleIcon,
-  TagIcon,
-  UserGroupIcon,
 } from "./icons";
 
 const INCOME_COLOR = { light: "#1a9b68", dark: "#27a674" };
@@ -36,11 +36,15 @@ type YearMonth = {
   installment: number;
   subscription: number;
   utility: number;
-  customItems: number;
   cards: { card: string; total: number }[];
-  /** 別人分享給我、且目前勾選納入的項目,收入與支出分開合計(規則見 lib/overviewItems.ts 的 includedSharedTotals) */
+  /** 別人分享給我、且目前勾選納入的資料,收入與支出分開合計 */
   sharedIncome: number;
   sharedExpense: number;
+  /** 已納入的共享資料各分項(已含在 sharedExpense 裡) */
+  sharedCash: number;
+  sharedInstallment: number;
+  sharedSubscription: number;
+  sharedUtility: number;
 };
 
 type YearCard = { _id: string; name: string; isDebit: boolean };
@@ -49,21 +53,29 @@ type YearData = { year: number; months: YearMonth[]; cards: YearCard[] };
 
 type ChartRow = YearMonth & { label: string };
 
-/** 共享總額計入統計時,跟月檢視一樣:共享收入加進收入、共享支出加進支出,結餘跟著重算。 */
+/** 共享計入統計時,跟月檢視一樣:共享收入加進收入、共享支出加進支出(各分項也加上共享的部分),結餘跟著重算。 */
 function withShared(m: YearMonth): YearMonth {
   const income = m.income + m.sharedIncome;
   const expense = m.expense + m.sharedExpense;
-  return { ...m, income, expense, balance: income - expense };
+  return {
+    ...m,
+    income,
+    expense,
+    balance: income - expense,
+    cash: m.cash + m.sharedCash,
+    installment: m.installment + m.sharedInstallment,
+    subscription: m.subscription + m.sharedSubscription,
+    utility: m.utility + m.sharedUtility,
+  };
 }
 
 function money(n: number) {
   return `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString()}`;
 }
 
-function sumOf(
-  months: YearMonth[],
-  key: "income" | "expense" | "balance" | "cash" | "installment" | "subscription" | "utility" | "customItems" | "sharedIncome" | "sharedExpense"
-) {
+type NumberKey = { [K in keyof YearMonth]: YearMonth[K] extends number ? K : never }[keyof YearMonth];
+
+function sumOf(months: YearMonth[], key: NumberKey) {
   return months.reduce((total, m) => total + m[key], 0);
 }
 
@@ -91,7 +103,7 @@ function MonthTooltip({
   );
 }
 
-function Stat({ label, value, Icon }: { label: string; value: string; Icon: typeof ScaleIcon }) {
+function Stat({ label, value, Icon, note }: { label: string; value: string; Icon: typeof ScaleIcon; note?: ReactNode }) {
   return (
     <div>
       <p className="flex items-center justify-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -99,11 +111,12 @@ function Stat({ label, value, Icon }: { label: string; value: string; Icon: type
         {label}
       </p>
       <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
+      {note}
     </div>
   );
 }
 
-function Tile({ label, value, Icon }: { label: string; value: string; Icon: typeof ScaleIcon }) {
+function Tile({ label, value, Icon, note }: { label: string; value: string; Icon: typeof ScaleIcon; note?: ReactNode }) {
   return (
     <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
       <p className="flex items-center justify-center gap-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
@@ -111,13 +124,14 @@ function Tile({ label, value, Icon }: { label: string; value: string; Icon: type
         <span className="truncate">{label}</span>
       </p>
       <p className="break-words font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
+      {note}
     </div>
   );
 }
 
 /**
- * /overview 的年度檢視:一次看一整年每個月的收支,資料來自 OverviewSummary 快取(GET /api/overview/year),
- * 另附每月共享總額(別人分享給我、目前勾選納入的項目淨額),可切換是否計入收入 / 支出 / 結餘。點某個月份(長條或列表)切回該月的月檢視。
+ * /overview 的年度檢視:一次看一整年每個月的收支,資料每次由 GET /api/overview/year 從原始資料即時算,
+ * 另附每月共享收支與各分項(別人分享給我、目前勾選納入的資料),可切換是否計入;計入時數字含共享,底下標共享多少。點某個月份(長條或列表)切回該月的月檢視。
  */
 export default function YearOverview({
   year,
@@ -167,8 +181,10 @@ export default function YearOverview({
     return month >= range.start && month <= range.end;
   });
   const months = includeShared ? rawMonths.map(withShared) : rawMonths;
-  const sharedIncome = sumOf(rawMonths, "sharedIncome");
-  const sharedExpense = sumOf(rawMonths, "sharedExpense");
+  // 計入共享時才在數字底下標共享多少;關閉時一律 0(不顯示)
+  const sharedSum = (key: NumberKey) => (includeShared ? sumOf(rawMonths, key) : 0);
+  const sharedIncome = sharedSum("sharedIncome");
+  const sharedExpense = sharedSum("sharedExpense");
   const incomeColor = isDark ? INCOME_COLOR.dark : INCOME_COLOR.light;
   const expenseColor = isDark ? EXPENSE_COLOR.dark : EXPENSE_COLOR.light;
   const gridColor = isDark ? "#2c2c2a" : "#e1e0d9";
@@ -230,9 +246,14 @@ export default function YearOverview({
       <div className={`flex flex-col gap-6 transition-opacity ${loading ? "opacity-60" : ""}`}>
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mb-4 grid grid-cols-2 gap-4 text-center sm:grid-cols-4">
-            <Stat label="年收入" value={money(income)} Icon={ArrowUpCircleIcon} />
-            <Stat label="年支出" value={money(expense)} Icon={ArrowDownCircleIcon} />
-            <Stat label="年結餘" value={money(balance)} Icon={ScaleIcon} />
+            <Stat label="年收入" value={money(income)} Icon={ArrowUpCircleIcon} note={<SharedNote amount={sharedIncome} />} />
+            <Stat label="年支出" value={money(expense)} Icon={ArrowDownCircleIcon} note={<SharedNote amount={sharedExpense} />} />
+            <Stat
+              label="年結餘"
+              value={money(balance)}
+              Icon={ScaleIcon}
+              note={<SharedNote amount={sharedIncome - sharedExpense} show={sharedIncome !== 0 || sharedExpense !== 0} />}
+            />
             <Stat
               label="月平均支出"
               value={activeMonths > 0 ? money(Math.round(expense / activeMonths)) : "-"}
@@ -254,21 +275,8 @@ export default function YearOverview({
                 <span className="h-2.5 w-2.5 rounded-sm" style={{ background: expenseColor }} />
                 支出
               </span>
-              {/* 跟下方「共享總額」格子是同一個開關 */}
-              <button
-                type="button"
-                onClick={() => setIncludeShared((prev) => !prev)}
-                aria-pressed={includeShared}
-                aria-label={includeShared ? "已計入共享總額,點擊取消" : "計入共享總額"}
-                title={includeShared ? "已計入共享總額,點擊取消" : "計入共享總額"}
-                className={`flex items-center rounded-md border p-1.5 transition-colors ${
-                  includeShared
-                    ? "border-indigo-200 bg-indigo-50 text-indigo-600 dark:border-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300"
-                    : "border-zinc-300 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
-                }`}
-              >
-                <UserGroupIcon className="h-4 w-4" />
-              </button>
+              {/* 跟下方「支出分項」標題列的共享按鈕是同一個開關 */}
+              <SharedToggleButton on={includeShared} onToggle={() => setIncludeShared((prev) => !prev)} />
             </div>
           </div>
           <div className="h-64 w-full">
@@ -402,37 +410,35 @@ export default function YearOverview({
               </div>
             </>
           )}
-          <h3
-            className={`mb-2 text-sm font-medium text-zinc-500 dark:text-zinc-400 ${cardRows.length > 0 ? "mt-4" : ""}`}
-          >
-            {rangeLabel}支出分項
-          </h3>
+          <div className={`mb-2 flex items-center justify-between gap-2 ${cardRows.length > 0 ? "mt-4" : ""}`}>
+            <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{rangeLabel}支出分項</h3>
+            <SharedToggleButton on={includeShared} onToggle={() => setIncludeShared((prev) => !prev)} />
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Tile label="現金" value={money(sumOf(months, "cash"))} Icon={BanknotesIcon} />
-            <Tile label="分期" value={money(sumOf(months, "installment"))} Icon={CalendarDaysIcon} />
-            <Tile label="訂閱" value={money(sumOf(months, "subscription"))} Icon={ArrowPathIcon} />
-            <Tile label="房租水電" value={money(sumOf(months, "utility"))} Icon={HomeIcon} />
-            <Tile label="自訂項目" value={money(sumOf(months, "customItems"))} Icon={TagIcon} />
-            <button
-              type="button"
-              onClick={() => setIncludeShared((prev) => !prev)}
-              aria-pressed={includeShared}
-              title="點擊切換是否計入上方統計:別人分享給我、且目前勾選納入的項目,收入 / 支出分開合計(結餘 = 對方的收入和支出都算)。開啟時分別加進每個月的收入與支出。"
-              className="relative w-full rounded-md border border-dashed border-zinc-300 p-3 text-center dark:border-zinc-700"
-            >
-              <span
-                className={`absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full ${
-                  includeShared ? "bg-indigo-400" : "bg-zinc-300 dark:bg-zinc-600"
-                }`}
-              />
-              <p className="flex items-center justify-center gap-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
-                <UserGroupIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">共享收入 / 支出</span>
-              </p>
-              <p className="break-words font-semibold text-zinc-900 dark:text-zinc-50">
-                {money(sharedIncome)} / {money(sharedExpense)}
-              </p>
-            </button>
+            <Tile
+              label="現金"
+              value={money(sumOf(months, "cash"))}
+              Icon={BanknotesIcon}
+              note={<SharedNote amount={sharedSum("sharedCash")} />}
+            />
+            <Tile
+              label="分期"
+              value={money(sumOf(months, "installment"))}
+              Icon={CalendarDaysIcon}
+              note={<SharedNote amount={sharedSum("sharedInstallment")} />}
+            />
+            <Tile
+              label="訂閱"
+              value={money(sumOf(months, "subscription"))}
+              Icon={ArrowPathIcon}
+              note={<SharedNote amount={sharedSum("sharedSubscription")} />}
+            />
+            <Tile
+              label="房租水電"
+              value={money(sumOf(months, "utility"))}
+              Icon={HomeIcon}
+              note={<SharedNote amount={sharedSum("sharedUtility")} />}
+            />
           </div>
         </div>
       </div>

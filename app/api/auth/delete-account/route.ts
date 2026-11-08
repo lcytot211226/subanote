@@ -5,9 +5,7 @@ import User from "@/lib/models/User";
 import Card from "@/lib/models/Card";
 import Transaction from "@/lib/models/Transaction";
 import Utility from "@/lib/models/Utility";
-import CustomItem from "@/lib/models/CustomItem";
 import RewardPlan from "@/lib/models/RewardPlan";
-import OverviewSummary from "@/lib/models/OverviewSummary";
 import Share from "@/lib/models/Share";
 import { AUTH_COOKIE_NAME, requireAuth, verifyPassword } from "@/lib/auth";
 
@@ -36,9 +34,7 @@ export async function POST(request: Request) {
     Card.deleteMany({ user: auth.userId }),
     Transaction.deleteMany({ user: auth.userId }),
     Utility.deleteMany({ user: auth.userId }),
-    CustomItem.deleteMany({ user: auth.userId }),
     RewardPlan.deleteMany({ user: auth.userId }),
-    OverviewSummary.deleteMany({ user: auth.userId }),
     Share.deleteMany({ owner: auth.userId }),
   ]);
   await User.deleteOne({ _id: auth.userId });

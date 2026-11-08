@@ -3,7 +3,6 @@ import Transaction from "@/lib/models/Transaction";
 import Card from "@/lib/models/Card";
 import { calculateBillingPeriod, toCardBillingInfo, type CardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { addMonthsClamped } from "@/lib/addMonths";
-import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
 import { DEFAULT_EXPENSE_KIND } from "@/lib/expenseKind";
 
 // 訂閱的日期(startDate/occurrence)都是從 "YYYY-MM-DD" 字串或 addMonthsClamped 算出來的 UTC 午夜,
@@ -28,7 +27,6 @@ function monthsBetweenUTC(from: Date, to: Date): number {
 export async function generateDueSubscriptionTransactions(userId: string) {
   const today = startOfToday();
   const subscriptions = await Subscription.find({ user: userId, startDate: { $lte: today } });
-  const touchedPeriods = new Set<string>();
 
   for (const sub of subscriptions) {
     let occurrenceIndex = sub.lastGeneratedDate ? monthsBetweenUTC(sub.startDate, sub.lastGeneratedDate) + 1 : 0;
@@ -61,7 +59,6 @@ export async function generateDueSubscriptionTransactions(userId: string) {
           billingPeriod,
           subscription: sub._id,
         });
-        touchedPeriods.add(billingPeriod);
       }
       latestOccurrence = occurrence;
       occurrenceIndex += 1;
@@ -72,9 +69,5 @@ export async function generateDueSubscriptionTransactions(userId: string) {
       sub.lastGeneratedDate = latestOccurrence;
       await sub.save();
     }
-  }
-
-  for (const period of touchedPeriods) {
-    await recomputeOverviewSummary(userId, period);
   }
 }

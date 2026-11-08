@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongodb";
 import Utility from "@/lib/models/Utility";
-import CustomItem from "@/lib/models/CustomItem";
 import { requireAuth } from "@/lib/auth";
 import { getCardReconciliationStatuses } from "@/lib/getCardReconciliationStatuses";
 import { getIncomingShares } from "@/lib/getIncomingShares";
@@ -25,16 +24,14 @@ export async function GET(request: Request) {
   const [year, month] = period.split("-").map(Number);
 
   await connectToDatabase();
-  const [utility, customItems, cardStatuses, incomingShares] = await Promise.all([
+  const [utility, cardStatuses, incomingShares] = await Promise.all([
     Utility.findOne({ user: auth.userId, year, month }),
-    CustomItem.find({ user: auth.userId, year, month }).sort({ createdAt: 1 }),
     getCardReconciliationStatuses(auth.userId, period),
     getIncomingShares(auth.email, period),
   ]);
 
   return NextResponse.json({
     utility,
-    customItems,
     cardStatuses,
     incomingShares,
   });

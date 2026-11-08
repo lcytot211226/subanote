@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongodb";
 import Utility from "@/lib/models/Utility";
 import { requireAuth } from "@/lib/auth";
-import { recomputeOverviewSummary } from "@/lib/recomputeOverviewSummary";
-import { formatPeriod } from "@/lib/overviewItems";
 
 export async function GET(request: Request) {
   const auth = await requireAuth();
@@ -50,12 +48,11 @@ export async function POST(request: Request) {
     waterEnabled,
     enabled,
   });
-  await recomputeOverviewSummary(auth.userId, formatPeriod(year, month));
   return NextResponse.json({ utility }, { status: 201 });
 }
 
 /**
- * 只切換某個月的繳費狀態 `{ year, month, paid }`。繳費狀態不影響金額統計,所以不用重算 OverviewSummary;
+ * 只切換某個月的繳費狀態 `{ year, month, paid }`。繳費狀態不影響金額統計,
  * 該月還沒有房租水電資料時回 404(沒有帳單就沒有繳費可言)。
  */
 export async function PATCH(request: Request) {
@@ -96,6 +93,5 @@ export async function PUT(request: Request) {
     { user: auth.userId, year, month, date, rent, elec, water, rentEnabled, elecEnabled, waterEnabled, enabled },
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
-  await recomputeOverviewSummary(auth.userId, formatPeriod(year, month));
   return NextResponse.json({ utility });
 }

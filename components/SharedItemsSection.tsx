@@ -1,101 +1,133 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import type { CardDTO } from "./CardForm";
-import ShareForm, { type ShareFormEditTarget } from "./ShareForm";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import Modal from "./Modal";
 import ConfirmDialog from "./ConfirmDialog";
-import { includedSharedTotals, type SharedTotals } from "@/lib/overviewItems";
+import Switch from "./Switch";
+import type { IncomingShare } from "@/lib/sharedTransactions";
 import { UserGroupIcon } from "./icons";
 
-export type IncomingShareDTO = {
-  _id: string;
-  ownerEmail: string;
-  itemKey: string;
-  label: string;
-  amount: number;
-  /** 只有結餘項目會帶:分享者當月的收入與支出(結餘 = 兩者都抓) */
-  income?: number;
-  expense?: number;
-  included: boolean;
-};
+type OutgoingShareDTO = { _id: string; targetEmail: string };
 
-type OutgoingShareDTO = {
-  _id: string;
-  targetEmail: string;
-  itemKey: string;
-  label: string;
-  included: boolean;
-};
-
-type EmailGroup = {
-  email: string;
-  items: IncomingShareDTO[];
-  includedTotals: SharedTotals;
-};
-
-function groupByEmail(items: IncomingShareDTO[]): EmailGroup[] {
-  const map = new Map<string, IncomingShareDTO[]>();
-  for (const item of items) {
-    const list = map.get(item.ownerEmail) ?? [];
-    list.push(item);
-    map.set(item.ownerEmail, list);
-  }
-  return Array.from(map.entries()).map(([email, groupItems]) => ({
-    email,
-    items: groupItems,
-    includedTotals: includedSharedTotals(groupItems.map((i) => ({ ...i, owner: email }))),
-  }));
+function money(n: number) {
+  return `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString()}`;
 }
 
+/** email 開頭字母的圓形頭像,讓清單比較好掃 */
+function Avatar({ email }: { email: string }) {
+  return (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold uppercase text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300">
+      {email.charAt(0)}
+    </span>
+  );
+}
+
+/** 分享出去的內容對照(跟 lib/getIncomingShares.ts 實際回傳的欄位一致,改那邊要一起改這裡) */
+const SHARED_FIELDS = [
+  "你的 email",
+  "每月收入、支出總額",
+  "每筆交易的日期、收入 / 支出、分類、金額(已扣點數折抵)",
+  "付款方式(現金 / 信用卡 / 分期)與是否為訂閱",
+  "房租水電:帳單日、租金、電費 / 水費(含度數與單價)、是否計入統計",
+];
+
+const PRIVATE_FIELDS = [
+  "交易的品項名稱",
+  "信用卡名稱與用哪張卡",
+  "分期第幾期 / 共幾期、點數折抵金額",
+  "訂閱清單本身、信用卡對帳 / 繳費狀態、房租水電繳費狀態",
+  "回饋試算、月結算日、你分享給其他人的對象",
+];
+
+function ScopeList({ title, items, tone }: { title: string; items: string[]; tone: "share" | "private" }) {
+  const mark = tone === "share" ? "✓" : "✕";
+  const markColor = tone === "share" ? "text-indigo-500 dark:text-indigo-400" : "text-zinc-400 dark:text-zinc-500";
+  return (
+    <div className="min-w-0 flex-1">
+      <p className="mb-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200">{title}</p>
+      <ul className="flex flex-col gap-1">
+        {items.map((item) => (
+          <li key={item} className="flex gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+            <span aria-hidden="true" className={`shrink-0 ${markColor}`}>
+              {mark}
+            </span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** 分享前清楚列出哪些會給對方、哪些保密 */
+function SharingScope() {
+  return (
+    <div className="mb-3 flex flex-col gap-3 rounded-md bg-zinc-50 p-3 sm:flex-row sm:gap-4 dark:bg-zinc-800/60">
+      <ScopeList title="對方看得到" items={SHARED_FIELDS} tone="share" />
+      <ScopeList title="保密(對方看不到)" items={PRIVATE_FIELDS} tone="private" />
+    </div>
+  );
+}
+
+/**
+ * /overview 的共享參考表:外面只是一列入口(標題 + 人數摘要 + 「編輯」),
+ * 所有操作都在 dialog 裡——別人分享給我的資料(本月收支 + 納入收支開關,切換直接送出)、
+ * 我分享給誰(上方直接輸入 email 新增,清單逐一取消分享)。
+ */
 export default function SharedItemsSection({
   incomingItems,
   loading,
   onIncomingChanged,
 }: {
-  incomingItems: IncomingShareDTO[];
+  incomingItems: IncomingShare[];
   loading: boolean;
-  /** 我(收件人)切換某個共享項目是否納入收支後呼叫,帶入更新後的清單,外層直接更新本地狀態、不重新載入總覽。 */
-  onIncomingChanged: (items: IncomingShareDTO[]) => void;
+  /** 我(收件人)切換某份分享是否納入收支後呼叫,帶入更新後的清單,外層直接更新本地狀態、不重新載入總覽。 */
+  onIncomingChanged: (items: IncomingShare[]) => void;
 }) {
   const [outgoingShares, setOutgoingShares] = useState<OutgoingShareDTO[]>([]);
-  const [cards, setCards] = useState<CardDTO[]>([]);
-  const [showDetail, setShowDetail] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  // 編輯已分享給某個 email 的項目(新增/減少),null 代表沒有在編輯
-  const [editTarget, setEditTarget] = useState<ShareFormEditTarget | null>(null);
+  const [open, setOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OutgoingShareDTO | null>(null);
-  const [showExitConfirm, setShowExitConfirm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  // 「納入收支」勾選只先改本地狀態,按下「儲存」或關閉視窗前確認要不要儲存時,才一次送出變更,
-  // 避免使用者每勾一次就打一次 API、等一次整頁重新載入。
-  const [localItems, setLocalItems] = useState<IncomingShareDTO[]>(incomingItems);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const loadOutgoing = useCallback(async () => {
     const res = await fetch("/api/shares");
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setOutgoingShares(data.shares ?? []);
   }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadOutgoing();
-    fetch("/api/cards")
-      .then((res) => res.json())
-      .then((data) => setCards(data.cards ?? []));
   }, [loadOutgoing]);
 
-  async function handleShared() {
-    setShowForm(false);
-    setEditTarget(null);
-    await loadOutgoing();
+  function close() {
+    setOpen(false);
+    setEmail("");
+    setAddError(null);
   }
 
-  function openEditTarget(email: string, shares: OutgoingShareDTO[]) {
-    setEditTarget({
-      targetEmail: email,
-      existingItems: shares.map((s) => ({ itemKey: s.itemKey, label: s.label })),
-    });
+  async function addShare(event: FormEvent) {
+    event.preventDefault();
+    const target = email.trim();
+    if (!target) return;
+    setAdding(true);
+    setAddError(null);
+    const res = await fetch("/api/shares", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetEmail: target }),
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    setAdding(false);
+    if (!res?.ok) {
+      setAddError(data.error ?? "分享失敗");
+      return;
+    }
+    setEmail("");
+    await loadOutgoing();
   }
 
   async function confirmDeleteOutgoing() {
@@ -105,294 +137,140 @@ export default function SharedItemsSection({
     await loadOutgoing();
   }
 
-  // 每次打開明細視窗都用伺服器最新的資料重置本地編輯狀態,開始一輪新的勾選。
-  useEffect(() => {
-    if (showDetail) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLocalItems(incomingItems);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDetail]);
-
-  const isDirty = localItems.some((item) => {
-    const original = incomingItems.find((i) => i._id === item._id);
-    return original ? original.included !== item.included : false;
-  });
-
-  function toggleIncludedLocal(item: IncomingShareDTO) {
-    setLocalItems((prev) =>
-      prev.map((i) => (i._id === item._id ? { ...i, included: !i.included } : i))
-    );
+  /** 一個分享者只有一個「納入收支」開關,切換直接送出;失敗就維持原狀。 */
+  async function toggleIncluded(share: IncomingShare) {
+    setSavingId(share._id);
+    const included = !share.included;
+    const ok = await fetch(`/api/shares/${share._id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ included }),
+    })
+      .then((res) => res.ok)
+      .catch(() => false);
+    setSavingId(null);
+    if (ok) onIncomingChanged(incomingItems.map((s) => (s._id === share._id ? { ...s, included } : s)));
   }
 
-  async function saveChanges() {
-    const changed = localItems.filter((item) => {
-      const original = incomingItems.find((i) => i._id === item._id);
-      return original && original.included !== item.included;
-    });
-    if (changed.length === 0) return;
-    setSaving(true);
-    const results = await Promise.all(
-      changed.map((item) =>
-        fetch(`/api/shares/${item._id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ included: item.included }),
-        })
-          .then((res) => res.ok)
-          .catch(() => false)
-      )
-    );
-    setSaving(false);
-    // 只套用成功送出的變更,失敗的維持原本的勾選狀態
-    const savedIds = new Set(changed.filter((_, i) => results[i]).map((item) => item._id));
-    const next = incomingItems.map((item) =>
-      savedIds.has(item._id) ? { ...item, included: !item.included } : item
-    );
-    setLocalItems(next);
-    onIncomingChanged(next);
-  }
-
-  function discardChanges() {
-    setLocalItems(incomingItems);
-  }
-
-  function requestCloseDetail() {
-    if (isDirty) {
-      setShowExitConfirm(true);
-      return;
-    }
-    setShowDetail(false);
-  }
-
-  async function confirmExitSave() {
-    await saveChanges();
-    setShowExitConfirm(false);
-    setShowDetail(false);
-  }
-
-  function confirmExitDiscard() {
-    discardChanges();
-    setShowExitConfirm(false);
-    setShowDetail(false);
-  }
-
-  const groups = groupByEmail(localItems);
-  const sharedWithMeEmails = Array.from(new Set(incomingItems.map((i) => i.ownerEmail)));
-  const sharedByMeEmails = Array.from(new Set(outgoingShares.map((s) => s.targetEmail)));
-  const outgoingGroups = sharedByMeEmails.map((email) => ({
-    email,
-    shares: outgoingShares.filter((s) => s.targetEmail === email),
-  }));
+  const incomingCount = incomingItems.length;
+  const outgoingCount = outgoingShares.length;
+  const summary =
+    incomingCount === 0 && outgoingCount === 0
+      ? "尚未共享"
+      : [incomingCount > 0 && `${incomingCount} 人分享給我`, outgoingCount > 0 && `分享給 ${outgoingCount} 人`]
+          .filter(Boolean)
+          .join(" · ");
 
   return (
     <div
       className={`rounded-lg border border-zinc-200 bg-white p-4 transition-opacity dark:border-zinc-800 dark:bg-zinc-900 ${loading ? "opacity-60" : ""}`}
     >
-      <div className="flex items-center justify-between">
-        <h2 className="flex items-center gap-1.5 font-medium text-zinc-900 dark:text-zinc-50">
-          <UserGroupIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 whitespace-nowrap font-medium text-zinc-900 dark:text-zinc-50">
+          <UserGroupIcon className="h-5 w-5 shrink-0 text-zinc-500 dark:text-zinc-400" />
           共享參考表
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="truncate text-sm text-zinc-400 dark:text-zinc-500">{summary}</span>
           <button
             type="button"
-            onClick={() => setShowDetail(true)}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
+            onClick={() => setOpen(true)}
+            className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-0.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
-            查看明細
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowForm(true)}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
-          >
-            新增分享
+            編輯
           </button>
         </div>
       </div>
 
-      {sharedWithMeEmails.length === 0 && sharedByMeEmails.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">目前沒有與任何人共享</p>
-      ) : (
-        <div className="mt-3 flex flex-col gap-2">
-          {sharedWithMeEmails.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-sm">
-              <span className="text-zinc-500 dark:text-zinc-400">分享給我:</span>
-              {sharedWithMeEmails.map((email) => (
-                <span
-                  key={email}
-                  className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-                >
-                  {email}
-                </span>
-              ))}
-            </div>
-          )}
-          {sharedByMeEmails.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-sm">
-              <span className="text-zinc-500 dark:text-zinc-400">我分享給:</span>
-              {sharedByMeEmails.map((email) => (
-                <span
-                  key={email}
-                  className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-                >
-                  {email}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <Modal open={showDetail} onClose={requestCloseDetail} title="共享參考表">
-        <div className="flex flex-col gap-5">
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">別人分享給我</h3>
-              <button
-                type="button"
-                onClick={saveChanges}
-                disabled={!isDirty || saving}
-                className="shrink-0 rounded-md border border-zinc-900 bg-zinc-900 px-3 py-1 text-xs font-medium text-white disabled:cursor-not-allowed disabled:border-zinc-300 disabled:bg-zinc-300 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:disabled:border-zinc-700 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400"
-              >
-                {saving ? "儲存中…" : "確定"}
-              </button>
-            </div>
-            {groups.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">目前沒有人跟你分享項目</p>
+      <Modal open={open} onClose={close} title="共享參考表">
+        <div className="flex flex-col gap-6">
+          <section>
+            <h3 className="mb-2 text-sm font-medium text-zinc-900 dark:text-zinc-50">別人分享給我</h3>
+            {incomingItems.length === 0 ? (
+              <p className="rounded-md bg-zinc-50 px-3 py-4 text-center text-sm text-zinc-400 dark:bg-zinc-800/60 dark:text-zinc-500">
+                目前沒有人跟你分享
+              </p>
             ) : (
-              <div className="flex flex-col gap-3">
-                {groups.map((group) => (
-                  <div key={group.email} className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-50">{group.email}</p>
-                      <span className="shrink-0 text-sm text-zinc-500 dark:text-zinc-400">
-                        已納入 收入{" "}
-                        <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                          ${group.includedTotals.income.toLocaleString()}
-                        </span>{" "}
-                        / 支出{" "}
-                        <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                          ${group.includedTotals.expense.toLocaleString()}
-                        </span>
-                      </span>
+              <ul className="divide-y divide-zinc-100 rounded-md border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+                {incomingItems.map((share) => (
+                  <li key={share._id} className="flex items-center gap-3 px-3 py-2.5">
+                    <Avatar email={share.ownerEmail} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">{share.ownerEmail}</p>
+                      <p className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                        本月收入 {money(share.income)} · 支出 {money(share.expense)}
+                      </p>
                     </div>
-                    <ul className="flex flex-col gap-2">
-                      {group.items.map((item) => (
-                        <li
-                          key={item._id}
-                          className="flex flex-col gap-1.5 rounded-md bg-zinc-50 p-2.5 sm:flex-row sm:items-center sm:justify-between dark:bg-zinc-800/60"
-                        >
-                          <span className="text-sm text-zinc-700 dark:text-zinc-300">{item.label}</span>
-                          <div className="flex items-center gap-3">
-                            <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-                              ${item.amount.toLocaleString()}
-                            </span>
-                            <label className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
-                              <input
-                                type="checkbox"
-                                checked={item.included}
-                                onChange={() => toggleIncludedLocal(item)}
-                              />
-                              納入收支
-                            </label>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                    <Switch
+                      label="納入"
+                      checked={share.included}
+                      disabled={savingId === share._id}
+                      onChange={() => toggleIncluded(share)}
+                    />
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
-          </div>
+          </section>
 
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">我分享出去的項目</h3>
+          <section>
+            <h3 className="mb-2 text-sm font-medium text-zinc-900 dark:text-zinc-50">我分享給</h3>
+            <SharingScope />
+            <form onSubmit={addShare} className="mb-3 flex gap-2">
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setAddError(null);
+                }}
+                placeholder="輸入對方的 email"
+                className="min-w-0 flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+              />
               <button
-                type="button"
-                onClick={() => setShowForm(true)}
-                className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
+                type="submit"
+                disabled={adding || !email.trim()}
+                className="shrink-0 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
               >
-                新增分享
+                {adding ? "分享中…" : "分享"}
               </button>
-            </div>
+            </form>
+            {addError && <p className="-mt-1 mb-3 text-sm text-red-600 dark:text-red-400">{addError}</p>}
             {outgoingShares.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">還沒有分享任何項目給別人</p>
+              <p className="rounded-md bg-zinc-50 px-3 py-4 text-center text-sm text-zinc-400 dark:bg-zinc-800/60 dark:text-zinc-500">
+                還沒有分享給任何人
+              </p>
             ) : (
-              <div className="flex flex-col gap-3">
-                {outgoingGroups.map((group) => (
-                  <div key={group.email} className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-50">{group.email}</p>
-                      <button
-                        type="button"
-                        onClick={() => openEditTarget(group.email, group.shares)}
-                        className="shrink-0 rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
-                      >
-                        編輯項目
-                      </button>
-                    </div>
-                    <ul className="flex flex-col gap-2">
-                      {group.shares.map((share) => (
-                        <li
-                          key={share._id}
-                          className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2.5 py-2 dark:bg-zinc-800/60"
-                        >
-                          <span className="min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-300">{share.label}</span>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteTarget(share)}
-                            className="shrink-0 text-xs text-red-600 hover:underline dark:text-red-400"
-                          >
-                            取消分享
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+              <ul className="divide-y divide-zinc-100 rounded-md border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+                {outgoingShares.map((share) => (
+                  <li key={share._id} className="flex items-center gap-3 px-3 py-2.5">
+                    <Avatar email={share.targetEmail} />
+                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-300">
+                      {share.targetEmail}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(share)}
+                      className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                    >
+                      取消分享
+                    </button>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
-          </div>
+          </section>
         </div>
-      </Modal>
-
-      <Modal open={showForm} onClose={() => setShowForm(false)} title="新增分享">
-        <ShareForm cards={cards} onSaved={handleShared} onCancel={() => setShowForm(false)} />
-      </Modal>
-
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="編輯分享項目">
-        {editTarget && (
-          <ShareForm
-            key={editTarget.targetEmail}
-            cards={cards}
-            editTarget={editTarget}
-            onSaved={handleShared}
-            onCancel={() => setEditTarget(null)}
-          />
-        )}
       </Modal>
 
       <ConfirmDialog
         open={!!deleteTarget}
         title="取消分享"
-        message={`確定要取消分享「${deleteTarget?.label ?? ""}」給 ${deleteTarget?.targetEmail ?? ""} 嗎?`}
+        message={`確定要停止分享給 ${deleteTarget?.targetEmail ?? ""} 嗎?對方將不再看得到你的收支。`}
         confirmLabel="取消分享"
         onConfirm={confirmDeleteOutgoing}
         onCancel={() => setDeleteTarget(null)}
-      />
-
-      <ConfirmDialog
-        open={showExitConfirm}
-        title="儲存變更?"
-        message="「納入收支」的勾選有異動尚未儲存,要儲存嗎?"
-        confirmLabel="儲存"
-        cancelLabel="不儲存"
-        danger={false}
-        onConfirm={confirmExitSave}
-        onCancel={confirmExitDiscard}
       />
     </div>
   );

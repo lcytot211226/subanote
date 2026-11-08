@@ -5,7 +5,7 @@ import { requireAuth } from "@/lib/auth";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** 收件人(targetEmail 對得上自己的 email)決定要不要把這筆分享納入自己的支出計算。 */
+/** 收件人(targetEmail 對得上自己的 email)決定要不要把這份分享納入自己的收支統計。 */
 export async function PUT(request: Request, { params }: Context) {
   const auth = await requireAuth();
   if (!auth) {
@@ -24,7 +24,7 @@ export async function PUT(request: Request, { params }: Context) {
   if (!share) {
     return NextResponse.json({ error: "找不到分享紀錄" }, { status: 404 });
   }
-  return NextResponse.json({ share });
+  return NextResponse.json({ share: { _id: share._id.toString(), included: share.included } });
 }
 
 /** 分享者刪除自己設定的分享。 */
