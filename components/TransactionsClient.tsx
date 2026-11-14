@@ -17,6 +17,7 @@ import {
 } from "./icons";
 import { useSearchParams } from "next/navigation";
 import { usePeriod } from "@/lib/usePeriod";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { netAmount } from "@/lib/pointsDiscount";
 import { isKindFor, kindOf, type TransactionKind } from "@/lib/transactionKind";
 import KindIcon from "./KindIcon";
@@ -138,6 +139,8 @@ export default function TransactionsClient({
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TransactionDTO | null>(null);
   const [addingAlternative, setAddingAlternative] = useState(false);
+  // 寬螢幕(lg 以上)新增 / 編輯時改成右側面板,接在列表右邊(頁面會跟著加寬,見 /expense、/income 的 page),可以邊看邊新增
+  const isWide = useMediaQuery("(min-width: 1024px)");
   const [deleteTarget, setDeleteTarget] = useState<TransactionDTO | null>(null);
 
   const showCardFilter = category === "credit_card" || category === "installment";
@@ -207,10 +210,7 @@ export default function TransactionsClient({
 
   // 新增 / 編輯 / 刪除都直接用 API 的回應更新本地列表,不重新抓整個月份。
   // 只保留歸屬這個月份、同類型的交易(例如分期的其他期數、改了日期跑到別的月份的就不放進來)。
-  const belongsHere = useCallback(
-    (t: TransactionDTO) => t.type === type && t.billingPeriod === period,
-    [type, period]
-  );
+  const belongsHere = useCallback((t: TransactionDTO) => t.type === type && t.billingPeriod === period, [type, period]);
 
   function handleAdded(added: TransactionDTO[]) {
     const visible = added.filter(belongsHere);
@@ -220,9 +220,14 @@ export default function TransactionsClient({
   function handleSaved(saved: TransactionDTO) {
     const groupId = saved.installmentGroupId;
     setTransactions((prev) =>
-      (belongsHere(saved) ? prev.map((t) => (t._id === saved._id ? saved : t)) : prev.filter((t) => t._id !== saved._id))
+      (belongsHere(saved)
+        ? prev.map((t) => (t._id === saved._id ? saved : t))
+        : prev.filter((t) => t._id !== saved._id)
+      )
         // 同一組分期共用分類,後端已經整組更新,這裡同步其他期數(若剛好也在這個月份)
-        .map((t) => (groupId && t._id !== saved._id && t.installmentGroupId === groupId ? { ...t, kind: saved.kind } : t))
+        .map((t) =>
+          groupId && t._id !== saved._id && t.installmentGroupId === groupId ? { ...t, kind: saved.kind } : t
+        )
     );
   }
 
@@ -271,281 +276,331 @@ export default function TransactionsClient({
     const byDate = a.date.localeCompare(b.date);
     const byCreated = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
     const byAmount = netAmount(a) - netAmount(b);
-    return sortKey === "date"
-      ? sign * (byDate || byCreated)
-      : sign * byAmount || -byDate || -byCreated;
+    return sortKey === "date" ? sign * (byDate || byCreated) : sign * byAmount || -byDate || -byCreated;
   });
   const total = visibleTransactions.reduce((sum, t) => sum + netAmount(t), 0);
   const label = type === "income" ? "收入" : "支出";
   const showAlternative = !!addAlternative && !editing && addingAlternative;
+  // 新增時沿用目前的篩選條件當預設值:例如正在看某張卡,新增就預設是這張卡的刷卡。
+  // 收入一律是現金(付款方式 / 卡片篩選本來就不會有值),只沿用分類。
+  const addDefaults = {
+    category: (CATEGORY_VALUES as readonly string[]).includes(category)
+      ? (category as (typeof CATEGORY_VALUES)[number])
+      : cardFilter
+        ? ("credit_card" as const)
+        : undefined,
+    card: showCardFilter && cardFilter ? cardFilter : undefined,
+    kind: kindFilter || undefined,
+  };
+  const formOpen = showForm || !!editing;
+  const panelOpen = formOpen && isWide;
+
+  const addTypeSwitch = addAlternative && !editing && (
+    <div
+      role="group"
+      aria-label="新增類型"
+      className="mb-4 grid grid-cols-2 gap-1 rounded-md border border-zinc-300 p-0.5 text-sm dark:border-zinc-700"
+    >
+      {[
+        { alt: false, text: label },
+        { alt: true, text: addAlternative.label },
+      ].map((opt) => (
+        <button
+          key={opt.text}
+          type="button"
+          onClick={() => setAddingAlternative(opt.alt)}
+          aria-pressed={addingAlternative === opt.alt}
+          className={`rounded px-3 py-1.5 font-medium ${
+            addingAlternative === opt.alt
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "text-zinc-600 dark:text-zinc-300"
+          }`}
+        >
+          {opt.text}
+        </button>
+      ))}
+    </div>
+  );
+  const formBody = showAlternative ? (
+    addAlternative.render(closeForm)
+  ) : (
+    <TransactionForm
+      key={editing ? editing._id : "new"}
+      type={type}
+      cards={initialCards}
+      transaction={editing ?? undefined}
+      defaults={editing ? undefined : addDefaults}
+      onSaved={(saved) => {
+        closeForm();
+        handleSaved(saved);
+      }}
+      onAdded={handleAdded}
+      onCancel={closeForm}
+      onDelete={editing ? () => setDeleteTarget(editing) : undefined}
+    />
+  );
+  const formTitle = editing ? `編輯${label}` : `新增${showAlternative ? addAlternative.label : label}`;
 
   return (
-    // 底部留白,避免最後一筆被右下角的浮動「+」擋住
-    <div className="flex flex-col gap-6 pb-20">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-3">
-          <MonthPicker value={period} onChange={setPeriod} />
-          {/* 收入一律是現金(見 TransactionForm),付款方式篩選沒有意義,只在支出顯示 */}
-          {type === "expense" && (
-            <Dropdown
-              value={category}
-              onChange={handleCategoryChange}
-              ariaLabel="付款方式"
-              options={[
-                { value: "", label: "全部付款方式", icon: ALL_ICON },
-                paymentOption("cash", "現金"),
-                paymentOption("credit_card", "信用卡"),
-                paymentOption("installment", "分期"),
-              ]}
-            />
-          )}
-          {/* 信用卡篩選跟著付款方式出現,放在它旁邊 */}
-          {showCardFilter && (
-            <Dropdown
-              value={cardFilter}
-              onChange={setCardFilter}
-              ariaLabel="信用卡"
-              options={[{ value: "", label: "全部信用卡", icon: ALL_ICON }, ...cardOptions(initialCards)]}
-            />
-          )}
-          <KindFilter type={type} value={kindFilter} onChange={setKindFilter} />
+    <div className="lg:flex lg:items-start lg:gap-6">
+      {/* 底部留白,避免最後一筆被右下角的浮動「+」擋住 */}
+      <div className="flex min-w-0 flex-1 flex-col gap-6 pb-20">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <MonthPicker value={period} onChange={setPeriod} />
+            {/* 收入一律是現金(見 TransactionForm),付款方式篩選沒有意義,只在支出顯示 */}
+            {type === "expense" && (
+              <Dropdown
+                value={category}
+                onChange={handleCategoryChange}
+                ariaLabel="付款方式"
+                options={[
+                  { value: "", label: "全部付款方式", icon: ALL_ICON },
+                  paymentOption("cash", "現金"),
+                  paymentOption("credit_card", "信用卡"),
+                  paymentOption("installment", "分期"),
+                ]}
+              />
+            )}
+            {/* 信用卡篩選跟著付款方式出現,放在它旁邊 */}
+            {showCardFilter && (
+              <Dropdown
+                value={cardFilter}
+                onChange={setCardFilter}
+                ariaLabel="信用卡"
+                options={[{ value: "", label: "全部信用卡", icon: ALL_ICON }, ...cardOptions(initialCards)]}
+              />
+            )}
+            <KindFilter type={type} value={kindFilter} onChange={setKindFilter} />
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-      </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜尋名稱,可用逗號分隔多個關鍵字"
-          className="w-full flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-        />
-        <div className="flex items-center justify-between gap-3 sm:justify-start">
-          <div
-            role="group"
-            aria-label={`排序方式(目前${sortLabel(sortKey, sortDir)})`}
-            className="flex shrink-0 items-center gap-0.5 rounded-md border border-zinc-300 p-0.5 dark:border-zinc-700"
-          >
-            {SORT_OPTIONS.map((opt) => {
-              const active = sortKey === opt.value;
-              // 點目前已選的欄位也會反轉方向,效果同旁邊的箭頭;點另一個欄位則沿用目前方向
-              const title = active ? `${sortLabel(opt.value, sortDir)},點擊反轉` : `依${opt.label}排序`;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() =>
-                    saveSort(opt.value, active ? (sortDir === "desc" ? "asc" : "desc") : sortDir)
-                  }
-                  aria-pressed={active}
-                  aria-label={title}
-                  title={title}
-                  className={`flex items-center justify-center rounded px-2 py-1.5 transition-colors duration-300 active:scale-90 motion-reduce:transition-none ${
-                    active
-                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                      : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜尋名稱,可用逗號分隔多個關鍵字"
+            className="w-full flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+          />
+          <div className="flex items-center justify-between gap-3 sm:justify-start">
+            <div
+              role="group"
+              aria-label={`排序方式(目前${sortLabel(sortKey, sortDir)})`}
+              className="flex shrink-0 items-center gap-0.5 rounded-md border border-zinc-300 p-0.5 dark:border-zinc-700"
+            >
+              {SORT_OPTIONS.map((opt) => {
+                const active = sortKey === opt.value;
+                // 點目前已選的欄位也會反轉方向,效果同旁邊的箭頭;點另一個欄位則沿用目前方向
+                const title = active ? `${sortLabel(opt.value, sortDir)},點擊反轉` : `依${opt.label}排序`;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => saveSort(opt.value, active ? (sortDir === "desc" ? "asc" : "desc") : sortDir)}
+                    aria-pressed={active}
+                    aria-label={title}
+                    title={title}
+                    className={`flex items-center justify-center rounded px-2 py-1.5 transition-colors duration-300 active:scale-90 motion-reduce:transition-none ${
+                      active
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+                    }`}
+                  >
+                    <opt.Icon className="h-5 w-5" />
+                  </button>
+                );
+              })}
+              <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-zinc-300 dark:bg-zinc-700" />
+              {/* 兩個欄位共用的方向切換:向下 = 高到低 / 新到舊,向上 = 低到高 / 舊到新 */}
+              <button
+                type="button"
+                onClick={() => saveSort(sortKey, sortDir === "desc" ? "asc" : "desc")}
+                aria-label={`${sortLabel(sortKey, sortDir)},點擊反轉`}
+                title={`${sortLabel(sortKey, sortDir)},點擊反轉`}
+                className="flex items-center justify-center rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 active:scale-90 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                <ArrowDownIcon
+                  className={`h-5 w-5 transition-transform duration-300 motion-reduce:transition-none ${
+                    sortDir === "asc" ? "rotate-180" : ""
                   }`}
-                >
-                  <opt.Icon className="h-5 w-5" />
-                </button>
-              );
-            })}
-            <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-zinc-300 dark:bg-zinc-700" />
-            {/* 兩個欄位共用的方向切換:向下 = 高到低 / 新到舊,向上 = 低到高 / 舊到新 */}
+                />
+              </button>
+            </div>
+            {/* 手機一律單欄(見 GRID_CLASS),切換鈕沒作用,直接隱藏 */}
+            <div
+              role="group"
+              aria-label="顯示方式"
+              className="relative hidden shrink-0 grid-cols-3 sm:grid rounded-md border border-zinc-300 p-0.5 dark:border-zinc-700"
+            >
+              {/* 滑動的選取底色:寬度固定 1/3,依目前選項往右平移,切換時會滑過去。 */}
+              <span
+                aria-hidden="true"
+                className="absolute inset-y-0.5 left-0.5 w-[calc((100%-0.25rem)/3)] rounded bg-zinc-900 transition-transform duration-300 ease-out motion-reduce:transition-none dark:bg-zinc-100"
+                style={{ transform: `translateX(${(columns - 1) * 100}%)` }}
+              />
+              {COLUMN_OPTIONS.map((opt) => {
+                const active = columns === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => handleColumnsChange(opt.value)}
+                    aria-pressed={active}
+                    aria-label={opt.label}
+                    title={opt.label}
+                    className={`relative z-10 flex items-center justify-center rounded px-3 py-1.5 transition-colors duration-300 active:scale-90 motion-reduce:transition-none ${
+                      active
+                        ? "text-white dark:text-zinc-900"
+                        : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+                    }`}
+                  >
+                    <opt.Icon
+                      className={`h-5 w-5 transition-transform duration-300 motion-reduce:transition-none ${
+                        active ? "scale-110" : "scale-100"
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* 新增 / 編輯在窄螢幕用 dialog,寬螢幕用右側面板(見下方 aside) */}
+        <Modal open={formOpen && !isWide} onClose={closeForm} title={formTitle}>
+          {addTypeSwitch}
+          {formBody}
+        </Modal>
+
+        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {period} {label}總額{keyword ? `(符合「${search.trim()}」)` : ""}
+          </p>
+          <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">${total.toLocaleString()}</p>
+        </div>
+
+        <ul className={GRID_CLASS[columns]}>
+          {loading && <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">載入中...</p>}
+          {!loading && transactions.length === 0 && (
+            <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">這個月份還沒有{label}紀錄</p>
+          )}
+          {!loading && transactions.length > 0 && categoryFiltered.length === 0 && (
+            <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">沒有符合篩選條件的{label}</p>
+          )}
+          {!loading && categoryFiltered.length > 0 && visibleTransactions.length === 0 && (
+            <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">
+              找不到名稱符合「{search.trim()}」的{label}
+            </p>
+          )}
+          {visibleTransactions.map((t) => (
+            <li
+              key={t._id}
+              role="button"
+              tabIndex={0}
+              onClick={() => openEdit(t)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openEdit(t);
+                }
+              }}
+              // 手機一律單欄:名稱在左、金額在右;桌面 2 / 3 欄才改成上下堆疊
+              // 右側面板正在編輯的那筆加深外框,看得出是哪一筆
+              className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-white p-4 transition-colors hover:border-zinc-400 ${
+                panelOpen && editing?._id === t._id
+                  ? "border-zinc-900 dark:border-zinc-100"
+                  : "border-zinc-200 dark:border-zinc-800"
+              } hover:bg-zinc-50 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800/60 ${
+                columns === 1 ? "" : "sm:flex-col sm:items-stretch sm:gap-2"
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <KindIcon kind={kindOf(t)} />
+                <div className="min-w-0">
+                  <p className="font-medium text-zinc-900 dark:text-zinc-50">{t.item}</p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {t.date.slice(0, 10)} · {CATEGORY_LABEL[t.category]}
+                    {t.card ? ` · ${t.card.name}` : ""}
+                    {t.installmentInfo
+                      ? ` · 第${t.installmentInfo.currentNumber}/${t.installmentInfo.totalNumber}期`
+                      : ""}
+                    {!t.posted ? " · 未入帳" : ""}
+                    {t.subscription ? " · 訂閱" : ""}
+                  </p>
+                </div>
+              </div>
+              <div className={`shrink-0 text-right ${columns === 1 ? "" : "sm:text-left"}`}>
+                <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                  ${netAmount(t).toLocaleString()}
+                  {t.pointsDiscount ? (
+                    <span className="block text-xs font-normal text-zinc-500 sm:ml-2 sm:inline dark:text-zinc-400">
+                      ${t.amount.toLocaleString()} − 點數 ${t.pointsDiscount.toLocaleString()}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        {!panelOpen && (
+          <>
+            {/* 新增按鈕:右下角浮動「+」,樣式同 /overview 手機版的快速記帳(QuickAddButton),桌面版也一樣 */}
             <button
               type="button"
-              onClick={() => saveSort(sortKey, sortDir === "desc" ? "asc" : "desc")}
-              aria-label={`${sortLabel(sortKey, sortDir)},點擊反轉`}
-              title={`${sortLabel(sortKey, sortDir)},點擊反轉`}
-              className="flex items-center justify-center rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 active:scale-90 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              onClick={() => {
+                setEditing(null);
+                setAddingAlternative(false);
+                setShowForm(true);
+              }}
+              aria-label={`新增${label}`}
+              title={`新增${label}`}
+              className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-white shadow-lg transition-transform hover:bg-zinc-700 active:scale-90 motion-reduce:transition-none sm:bottom-8 sm:right-8 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
-              <ArrowDownIcon
-                className={`h-5 w-5 transition-transform duration-300 motion-reduce:transition-none ${
-                  sortDir === "asc" ? "rotate-180" : ""
-                }`}
-              />
+              <PlusIcon className="h-7 w-7" />
+            </button>
+          </>
+        )}
+
+        <ConfirmDialog
+          open={!!deleteTarget}
+          title="刪除確認"
+          message={
+            deleteTarget?.installmentInfo
+              ? `這是分期交易(共 ${deleteTarget.installmentInfo.totalNumber} 期),刪除會把全部 ${deleteTarget.installmentInfo.totalNumber} 期一起刪掉,確定嗎?`
+              : "確定要刪除這筆交易嗎?"
+          }
+          confirmLabel="刪除"
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      </div>
+
+      {panelOpen && (
+        <aside
+          data-add-panel
+          aria-label={formTitle}
+          className="sticky top-4 max-h-[calc(100vh-2rem)] w-[22rem] shrink-0 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+        >
+          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{formTitle}</h2>
+            <button
+              type="button"
+              onClick={closeForm}
+              aria-label="關閉"
+              className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              ✕
             </button>
           </div>
-          {/* 手機一律單欄(見 GRID_CLASS),切換鈕沒作用,直接隱藏 */}
-          <div
-            role="group"
-            aria-label="顯示方式"
-            className="relative hidden shrink-0 grid-cols-3 sm:grid rounded-md border border-zinc-300 p-0.5 dark:border-zinc-700"
-          >
-            {/* 滑動的選取底色:寬度固定 1/3,依目前選項往右平移,切換時會滑過去。 */}
-            <span
-              aria-hidden="true"
-              className="absolute inset-y-0.5 left-0.5 w-[calc((100%-0.25rem)/3)] rounded bg-zinc-900 transition-transform duration-300 ease-out motion-reduce:transition-none dark:bg-zinc-100"
-              style={{ transform: `translateX(${(columns - 1) * 100}%)` }}
-            />
-            {COLUMN_OPTIONS.map((opt) => {
-              const active = columns === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => handleColumnsChange(opt.value)}
-                  aria-pressed={active}
-                  aria-label={opt.label}
-                  title={opt.label}
-                  className={`relative z-10 flex items-center justify-center rounded px-3 py-1.5 transition-colors duration-300 active:scale-90 motion-reduce:transition-none ${
-                    active
-                      ? "text-white dark:text-zinc-900"
-                      : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
-                  }`}
-                >
-                  <opt.Icon
-                    className={`h-5 w-5 transition-transform duration-300 motion-reduce:transition-none ${
-                      active ? "scale-110" : "scale-100"
-                    }`}
-                  />
-                </button>
-              );
-            })}
+          <div className="p-4">
+            {addTypeSwitch}
+            {formBody}
           </div>
-        </div>
-      </div>
-
-      <Modal
-        open={showForm || !!editing}
-        onClose={closeForm}
-        title={editing ? `編輯${label}` : `新增${showAlternative ? addAlternative.label : label}`}
-      >
-        {addAlternative && !editing && (
-          <div
-            role="group"
-            aria-label="新增類型"
-            className="mb-4 grid grid-cols-2 gap-1 rounded-md border border-zinc-300 p-0.5 text-sm dark:border-zinc-700"
-          >
-            {[
-              { alt: false, text: label },
-              { alt: true, text: addAlternative.label },
-            ].map((opt) => (
-              <button
-                key={opt.text}
-                type="button"
-                onClick={() => setAddingAlternative(opt.alt)}
-                aria-pressed={addingAlternative === opt.alt}
-                className={`rounded px-3 py-1.5 font-medium ${
-                  addingAlternative === opt.alt
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 dark:text-zinc-300"
-                }`}
-              >
-                {opt.text}
-              </button>
-            ))}
-          </div>
-        )}
-        {showAlternative ? (
-          addAlternative.render(closeForm)
-        ) : (
-          <TransactionForm
-            key={editing ? editing._id : "new"}
-            type={type}
-            cards={initialCards}
-            transaction={editing ?? undefined}
-            onSaved={(saved) => {
-              closeForm();
-              handleSaved(saved);
-            }}
-            onAdded={handleAdded}
-            onCancel={closeForm}
-            onDelete={editing ? () => setDeleteTarget(editing) : undefined}
-          />
-        )}
-      </Modal>
-
-      <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {period} {label}總額{keyword ? `(符合「${search.trim()}」)` : ""}
-        </p>
-        <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">${total.toLocaleString()}</p>
-      </div>
-
-      <ul className={GRID_CLASS[columns]}>
-        {loading && <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">載入中...</p>}
-        {!loading && transactions.length === 0 && (
-          <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">這個月份還沒有{label}紀錄</p>
-        )}
-        {!loading && transactions.length > 0 && categoryFiltered.length === 0 && (
-          <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">沒有符合篩選條件的{label}</p>
-        )}
-        {!loading && categoryFiltered.length > 0 && visibleTransactions.length === 0 && (
-          <p className="col-span-full text-sm text-zinc-500 dark:text-zinc-400">找不到名稱符合「{search.trim()}」的{label}</p>
-        )}
-        {visibleTransactions.map((t) => (
-          <li
-            key={t._id}
-            role="button"
-            tabIndex={0}
-            onClick={() => openEdit(t)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openEdit(t);
-              }
-            }}
-            // 手機一律單欄:名稱在左、金額在右;桌面 2 / 3 欄才改成上下堆疊
-            className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800/60 ${
-              columns === 1 ? "" : "sm:flex-col sm:items-stretch sm:gap-2"
-            }`}
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <KindIcon kind={kindOf(t)} />
-              <div className="min-w-0">
-                <p className="font-medium text-zinc-900 dark:text-zinc-50">{t.item}</p>
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {t.date.slice(0, 10)} · {CATEGORY_LABEL[t.category]}
-                  {t.card ? ` · ${t.card.name}` : ""}
-                  {t.installmentInfo ? ` · 第${t.installmentInfo.currentNumber}/${t.installmentInfo.totalNumber}期` : ""}
-                  {!t.posted ? " · 未入帳" : ""}
-                  {t.subscription ? " · 訂閱" : ""}
-                </p>
-              </div>
-            </div>
-            <div className={`shrink-0 text-right ${columns === 1 ? "" : "sm:text-left"}`}>
-              <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                ${netAmount(t).toLocaleString()}
-                {t.pointsDiscount ? (
-                  <span className="block text-xs font-normal text-zinc-500 sm:ml-2 sm:inline dark:text-zinc-400">
-                    ${t.amount.toLocaleString()} − 點數 ${t.pointsDiscount.toLocaleString()}
-                  </span>
-                ) : null}
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      {/* 新增按鈕:右下角浮動「+」,樣式同 /overview 手機版的快速記帳(QuickAddButton),桌面版也一樣 */}
-      <button
-        type="button"
-        onClick={() => {
-          setEditing(null);
-          setAddingAlternative(false);
-          setShowForm(true);
-        }}
-        aria-label={`新增${label}`}
-        title={`新增${label}`}
-        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-white shadow-lg transition-transform hover:bg-zinc-700 active:scale-90 motion-reduce:transition-none sm:bottom-8 sm:right-8 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-      >
-        <PlusIcon className="h-7 w-7" />
-      </button>
-
-      <ConfirmDialog
-        open={!!deleteTarget}
-        title="刪除確認"
-        message={
-          deleteTarget?.installmentInfo
-            ? `這是分期交易(共 ${deleteTarget.installmentInfo.totalNumber} 期),刪除會把全部 ${deleteTarget.installmentInfo.totalNumber} 期一起刪掉,確定嗎?`
-            : "確定要刪除這筆交易嗎?"
-        }
-        confirmLabel="刪除"
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
+        </aside>
+      )}
     </div>
   );
 }

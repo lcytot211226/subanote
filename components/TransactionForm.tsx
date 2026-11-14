@@ -34,10 +34,13 @@ export default function TransactionForm({
   onAdded,
   onCancel,
   onDelete,
+  defaults,
 }: {
   type: "income" | "expense";
   cards: CardDTO[];
   transaction?: TransactionDTO;
+  /** 新增時的預設值(例如沿用列表目前的篩選條件);編輯既有交易時忽略。 */
+  defaults?: { category?: TransactionCategory; card?: string; kind?: TransactionKind };
   /** 編輯既有交易成功後呼叫(通常會關閉表單),帶入更新後的交易。 */
   onSaved: (transaction: TransactionDTO) => void;
   /** 新增交易成功後呼叫(表單會保持開啟,方便連續輸入多筆),帶入新建立的交易(分期會是整組每一期)。 */
@@ -47,23 +50,23 @@ export default function TransactionForm({
   onDelete?: () => void;
 }) {
   const itemInputRef = useRef<HTMLInputElement>(null);
-  const [date, setDate] = useState(
-    transaction ? toDateInputValue(transaction.date) : toDateString(new Date())
-  );
+  const [date, setDate] = useState(transaction ? toDateInputValue(transaction.date) : toDateString(new Date()));
   const [category, setCategory] = useState<TransactionCategory>(
-    type === "income" ? "cash" : (transaction?.category ?? "cash")
+    type === "income" ? "cash" : (transaction?.category ?? defaults?.category ?? "cash")
   );
   const [item, setItem] = useState(transaction?.item ?? "");
-  const [kind, setKind] = useState<TransactionKind>(transaction ? kindOf(transaction) : "other");
+  const [kind, setKind] = useState<TransactionKind>(transaction ? kindOf(transaction) : (defaults?.kind ?? "other"));
   const [amount, setAmount] = useState(transaction ? String(transaction.amount) : "");
   const [pointsDiscount, setPointsDiscount] = useState(
     transaction?.pointsDiscount ? String(transaction.pointsDiscount) : ""
   );
   const [totalAmount, setTotalAmount] = useState("");
-  const [selectedCardId, setCardId] = useState(transaction?.card?._id ?? cards[0]?._id ?? "");
+  const [selectedCardId, setCardId] = useState(
+    transaction ? (transaction.card?._id ?? cards[0]?._id ?? "") : defaults?.card || cards[0]?._id || ""
+  );
   // 快速記帳會先用快取的卡片清單開表單,最新清單回來後若原本選的卡已不存在就改選第一張
   const cardId =
-    !selectedCardId || cards.some((c) => c._id === selectedCardId) ? selectedCardId : cards[0]?._id ?? "";
+    !selectedCardId || cards.some((c) => c._id === selectedCardId) ? selectedCardId : (cards[0]?._id ?? "");
   const [totalNumber, setTotalNumber] = useState(
     transaction?.installmentInfo ? String(transaction.installmentInfo.totalNumber) : "2"
   );
@@ -161,192 +164,196 @@ export default function TransactionForm({
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="grid grid-cols-1 gap-4 sm:grid-cols-3"
-    >
-      <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          {isCreatingInstallmentGroup ? "第一期日期" : "日期"}
-        </label>
-        <DatePicker
-          value={date}
-          onChange={setDate}
-          ariaLabel={isCreatingInstallmentGroup ? "第一期日期" : "日期"}
-          showDayShift
-        />
-      </div>
-
-      {type === "expense" && (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">付款方式</label>
-          <Dropdown
-            fullWidth
-            ariaLabel="付款方式"
-            value={category}
-            onChange={setCategory}
-            // 分期只能整組刪除重建,編輯時鎖住;單筆交易也不能改成分期
-            disabled={!!transaction && transaction.category === "installment"}
-            options={[
-              paymentOption("cash", "現金"),
-              paymentOption("credit_card", "信用卡(單筆)"),
-              ...(!transaction || transaction.category === "installment"
-                ? [paymentOption("installment", "分期")]
-                : []),
-            ]}
-          />
-        </div>
-      )}
-      {category !== "cash" ? (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">信用卡</label>
-          <Dropdown
-            fullWidth
-            ariaLabel="信用卡"
-            placeholder="請選擇卡片"
-            value={cardId}
-            onChange={setCardId}
-            options={cardOptions(cards)}
-          />
-        </div>
-      ) : type==="expense" && <div></div>}
-
-      {/* 收入、支出都有分類(各自一組) */}
-      <div className="sm:col-span-3">
-        <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">分類</label>
-        <KindPicker type={type} value={kind} onChange={setKind} />
-        {transaction?.installmentGroupId && (
-          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">同一組分期的每一期會一起改</p>
-        )}
-      </div>
-
-      <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">項目</label>
-        <input
-          ref={itemInputRef}
-          required
-          value={item}
-          onChange={(e) => setItem(e.target.value)}
-          placeholder="例如:聚餐"
-          className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-        />
-      </div>
-
-      {isCreatingInstallmentGroup ? (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">總金額</label>
-          <input
-            type="number"
-            min={0}
-            required
-            value={totalAmount}
-            onChange={(e) => setTotalAmount(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-          />
-        </div>
-      ) : (
+    // 欄數依表單本身的寬度(container query)而不是視窗寬度:放在窄的側邊面板時自動變單欄。
+    // 三欄時第一欄(日期)稍寬,日期 + 前後一天箭頭 +「今天」標籤才放得下
+    <form onSubmit={handleSubmit} className="@container">
+      <div className="grid grid-cols-1 gap-4 @xl:grid-cols-[1.35fr_1fr_1fr]">
         <div>
           <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            {category === "installment" ? "這一期金額" : "金額"}
+            {isCreatingInstallmentGroup ? "第一期日期" : "日期"}
           </label>
-          <input
-            type="number"
-            min={0}
-            required
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+          <DatePicker
+            value={date}
+            onChange={setDate}
+            ariaLabel={isCreatingInstallmentGroup ? "第一期日期" : "日期"}
+            showDayShift
           />
         </div>
-      )}
 
-      {showPointsDiscount ? (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            點數折抵<span className="ml-1 text-xs font-normal text-zinc-400 dark:text-zinc-500">(選填)</span>
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={amount || undefined}
-            value={pointsDiscount}
-            onChange={(e) => setPointsDiscount(e.target.value)}
-            placeholder="0"
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
-          />
-          {Number(pointsDiscount) > 0 && amount !== "" && (
-            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-              實付 ${(Number(amount) - Number(pointsDiscount)).toLocaleString()}
-            </p>
-          )}
-        </div>
-      ) : (
-        <div></div>
-      )}
-
-      {category === "installment" &&
-        (isCreatingInstallmentGroup ? (
+        {type === "expense" && (
           <div>
-            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">總期數</label>
-            <input
-              type="number"
-              min={1}
-              required
-              value={totalNumber}
-              onChange={(e) => setTotalNumber(e.target.value)}
-              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">付款方式</label>
+            <Dropdown
+              fullWidth
+              ariaLabel="付款方式"
+              value={category}
+              onChange={setCategory}
+              // 分期只能整組刪除重建,編輯時鎖住;單筆交易也不能改成分期
+              disabled={!!transaction && transaction.category === "installment"}
+              options={[
+                paymentOption("cash", "現金"),
+                paymentOption("credit_card", "信用卡(單筆)"),
+                ...(!transaction || transaction.category === "installment"
+                  ? [paymentOption("installment", "分期")]
+                  : []),
+              ]}
             />
-            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-              儲存後會自動建立 {totalNumber || "N"} 筆交易,每期各一筆。
-            </p>
+          </div>
+        )}
+        {category !== "cash" ? (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">信用卡</label>
+            <Dropdown
+              fullWidth
+              ariaLabel="信用卡"
+              placeholder="請選擇卡片"
+              value={cardId}
+              onChange={setCardId}
+              options={cardOptions(cards)}
+            />
           </div>
         ) : (
-          <div className="flex items-end">
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              第 {transaction?.installmentInfo?.currentNumber} / {transaction?.installmentInfo?.totalNumber} 期
-              (期數只能整組刪除重建,無法在此更改)
-            </p>
-          </div>
-        ))}
+          type === "expense" && <div></div>
+        )}
 
-      {category !== "cash" && !isCreatingInstallmentGroup && !isDebitCard && (
-        <div className="flex items-end">
-          <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
-            <input type="checkbox" checked={posted} onChange={(e) => setPosted(e.target.checked)} />
-            結帳日當下已入帳
-          </label>
+        {/* 收入、支出都有分類(各自一組) */}
+        <div className="@xl:col-span-3">
+          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">分類</label>
+          <KindPicker type={type} value={kind} onChange={setKind} />
+          {transaction?.installmentGroupId && (
+            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">同一組分期的每一期會一起改</p>
+          )}
         </div>
-      )}
 
-      {error && <p className="text-sm text-red-600 sm:col-span-3 dark:text-red-400">{error}</p>}
+        <div>
+          <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">項目</label>
+          <input
+            ref={itemInputRef}
+            required
+            value={item}
+            onChange={(e) => setItem(e.target.value)}
+            placeholder="例如:聚餐"
+            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+          />
+        </div>
 
-      <div className="flex gap-2 sm:col-span-3">
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-        >
-          {transaction ? "更新交易" : isCreatingInstallmentGroup ? "建立分期" : "新增交易"}
-        </button>
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
-          >
-            取消
-          </button>
+        {isCreatingInstallmentGroup ? (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">總金額</label>
+            <input
+              type="number"
+              min={0}
+              required
+              value={totalAmount}
+              onChange={(e) => setTotalAmount(e.target.value)}
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              {category === "installment" ? "這一期金額" : "金額"}
+            </label>
+            <input
+              type="number"
+              min={0}
+              required
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+            />
+          </div>
         )}
-        {transaction && onDelete && (
+
+        {showPointsDiscount ? (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              點數折抵
+              <span className="ml-1 text-xs font-normal text-zinc-400 dark:text-zinc-500">(選填)</span>
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={amount || undefined}
+              value={pointsDiscount}
+              onChange={(e) => setPointsDiscount(e.target.value)}
+              placeholder="0"
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+            />
+            {Number(pointsDiscount) > 0 && amount !== "" && (
+              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                實付 ${(Number(amount) - Number(pointsDiscount)).toLocaleString()}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div></div>
+        )}
+
+        {category === "installment" &&
+          (isCreatingInstallmentGroup ? (
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">總期數</label>
+              <input
+                type="number"
+                min={1}
+                required
+                value={totalNumber}
+                onChange={(e) => setTotalNumber(e.target.value)}
+                className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+              />
+              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                儲存後會自動建立 {totalNumber || "N"} 筆交易,每期各一筆。
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-end">
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                第 {transaction?.installmentInfo?.currentNumber} / {transaction?.installmentInfo?.totalNumber} 期
+                (期數只能整組刪除重建,無法在此更改)
+              </p>
+            </div>
+          ))}
+
+        {category !== "cash" && !isCreatingInstallmentGroup && !isDebitCard && (
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+              <input type="checkbox" checked={posted} onChange={(e) => setPosted(e.target.checked)} />
+              結帳日當下已入帳
+            </label>
+          </div>
+        )}
+
+        {error && <p className="text-sm text-red-600 @xl:col-span-3 dark:text-red-400">{error}</p>}
+
+        <div className="flex gap-2 @xl:col-span-3">
           <button
-            type="button"
-            onClick={onDelete}
+            type="submit"
             disabled={submitting}
-            className="ml-auto rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-600 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
-            刪除
+            {transaction ? "更新交易" : isCreatingInstallmentGroup ? "建立分期" : "新增交易"}
           </button>
-        )}
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
+            >
+              取消
+            </button>
+          )}
+          {transaction && onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={submitting}
+              className="ml-auto rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-600 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+            >
+              刪除
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

@@ -23,7 +23,7 @@ export function KindPicker<T extends TransactionKind>({
     <div
       role="radiogroup"
       aria-label="分類"
-      className={`grid grid-cols-4 gap-1.5 ${kinds.length > 4 ? "sm:grid-cols-8" : ""}`}
+      className={`grid grid-cols-4 gap-1.5 ${kinds.length > 4 ? "@md:grid-cols-8" : ""}`}
     >
       {kinds.map((k) => {
         const active = value === k;
