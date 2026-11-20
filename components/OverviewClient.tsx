@@ -262,14 +262,13 @@ export default function OverviewClient() {
 
   // x 軸用交易「實際發生日期」(MM/DD,含月份避免歧義),而不是入帳月份裡的第幾天:
   // 分期/信用卡消費常常是上個月的日期被算進這個月的帳單,MM/DD 才能分清楚是哪一天。
-  // 範圍取這個月帳單裡所有支出「實際日期」的最早~最晚一天,缺的日期補 0;完全沒有支出時退回顯示整個月份。
+  // 範圍取「目前圖表上有畫出來的」支出實際日期的最早~最晚一天(分期 / 訂閱 / 共享有沒有顯示會影響範圍),
+  // 缺的日期補 0;圖表上完全沒有支出時不畫圖表,改顯示「沒有交易」。
   // 分期預設不畫進圖表:分期只是單筆大額消費拆期攤還,畫進「每日支出」曲線容易造成單日突兀尖峰、失去參考意義,
   // 使用者可透過按鈕自行選擇要不要看。
   const chartExpenseList = showInstallmentInChart
     ? expenseList
     : expenseList.filter((t) => t.category !== "installment" && t.subscription === null);
-  // 日期範圍一律以全部支出(含分期)計算,只是分期關閉時該日金額歸零,
-  // 這樣切換按鈕不會讓 x 軸範圍跳動。
   const expenseByDate = new Map<string, number>();
   const expenseItemsByDate = new Map<string, { item: string; amount: number }[]>();
   for (const t of chartExpenseList) {
@@ -292,17 +291,10 @@ export default function OverviewClient() {
     items.push({ item: SHARED_ITEM_LABEL, amount });
     expenseItemsByDate.set(key, items);
   }
-  const sortedDateKeys = Array.from(
-    new Set([...expenseList, ...sharedExpenseList].map((t) => t.date.slice(0, 10)))
-  ).sort();
-  const rangeStart =
-    sortedDateKeys.length > 0 ? parseISODateToUTC(sortedDateKeys[0]) : Date.UTC(year, month - 1, 1);
-  const rangeEnd =
-    sortedDateKeys.length > 0
-      ? parseISODateToUTC(sortedDateKeys[sortedDateKeys.length - 1])
-      : Date.UTC(year, month, 0);
+  const sortedDateKeys = Array.from(expenseByDate.keys()).sort();
   const dailyExpense: DailyExpense[] = [];
-  for (let t = rangeStart; t <= rangeEnd; t += DAY_MS) {
+  const rangeEnd = sortedDateKeys.length > 0 ? parseISODateToUTC(sortedDateKeys[sortedDateKeys.length - 1]) : 0;
+  for (let t = sortedDateKeys.length > 0 ? parseISODateToUTC(sortedDateKeys[0]) : 1; t <= rangeEnd; t += DAY_MS) {
     const key = isoDateKey(t);
     dailyExpense.push({
       label: formatMMDD(t),
@@ -379,7 +371,20 @@ export default function OverviewClient() {
             {hasIncludedShares && <SharedToggleButton on={includeSharedInStats} onToggle={toggleShared} />}
           </div>
         </div>
-        <OverviewChart dailyExpense={dailyExpense} />
+        {dailyExpense.length > 0 ? (
+          <OverviewChart dailyExpense={dailyExpense} />
+        ) : (
+          <div className="flex h-64 flex-col items-center justify-center gap-1 text-sm text-zinc-400 dark:text-zinc-500">
+            {!loading && (
+              <>
+                <p>沒有交易</p>
+                {!showInstallmentInChart && expenseList.length + sharedExpenseList.length > 0 && (
+                  <p className="text-xs">分期與訂閱目前未顯示</p>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <CategoryBreakdown
