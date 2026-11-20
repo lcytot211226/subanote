@@ -16,7 +16,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## 技術棧
 
-- **Framework**: Next.js (App Router),前後端皆使用 Next.js(API Routes / Route Handlers 作為後端)。這個版本的 Next.js 用 `proxy.ts`(而非傳統的 `middleware.ts`)實作請求層攔截,細節見下方「認證與存取控制」。
+- **Framework**: Next.js 16 (App Router),前後端皆使用 Next.js(API Routes / Route Handlers 作為後端)。這個版本的 Next.js 用 `proxy.ts`(而非傳統的 `middleware.ts`)實作請求層攔截,細節見下方「認證與存取控制」。
 - **Database**: MongoDB,透過 Mongoose 定義 Schema(`lib/models/*.ts`)
 - **樣式**: Tailwind CSS(RWD + dark/light mode)
 - **Auth**: 自寫的輕量 Credentials 驗證(`lib/auth.ts`):bcryptjs 雜湊密碼、`jose` 簽發/驗證 JWT,存在 httpOnly cookie 做 session,沒有串接 NextAuth.js 或任何第三方登入
@@ -33,9 +33,19 @@ JWT_SECRET=<自訂一組亂數字串,用於簽發登入 token>
 EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 ```
 
-> 請勿將 `.env.local` 提交到 git(已加入 `.gitignore`)。
+> 請勿將 `.env.local` 提交到 git(`.gitignore` 已排除所有 `.env*`)。程式碼只讀這三個變數(外加 Next.js 內建的 `NODE_ENV`)。
+>
+> 本機 `npm run build` 也需要這三個變數存在,填假值就能 build。
 >
 > 管理員帳號(唯一能使用 `/admin` 後台發布系統公告的帳號)是寫死在 `lib/auth.ts` 的 `ADMIN_EMAIL` 常數,不是環境變數;要換人需要直接改程式碼。
+
+## 部署
+
+- 正式環境自架在 Mac mini(不是 Vercel):https://subanote.subani.cc,`next start` 跑在 `127.0.0.1:8101`,外網經 Cloudflare Tunnel 進來。
+- push 到 `main` 後最慢約 5 分鐘自動部署:Mac 上的部署腳本偵測到新 commit 會 `npm ci` → `npm run build` → `next start`(PM2 常駐),健康檢查打 `/`。
+- 正式環境的環境變數放在 Mac 上的 `~/server/apps/subanote/.env.production`(不進 git),要改環境變數改那裡,不是改 repo。
+- 沒有任何排程 / cron:訂閱交易是讀取時惰性生成(見下方 Subscription)。
+- 整體基礎架構說明在 Mac 上的 `~/mac-mini-overview.md` 與 `~/server/deploy.md`。
 
 ## 認證與存取控制
 
@@ -50,7 +60,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   - 驗證碼(註冊啟用 / 重設密碼共用)每組最多試 `OTP_MAX_ATTEMPTS` = 5 次,用完就作廢須重寄;`consumeVerificationCode()` 先原子地把 `User.verificationAttempts` +1 再比對雜湊,大量並發請求也不會超過 5 次。錯誤訊息統一,不透露剩幾次。
   - 寄信(註冊 / 重寄驗證碼 / 忘記密碼):同一個 email 重寄間隔 60 秒、每小時 5 封,同一個 IP 每小時 20 封,超過回 429 + `Retry-After`;忘記密碼被限制時照樣回成功、只是不寄,避免洩漏帳號是否存在。
   - 登入:同一個 email + IP 連續輸錯 3 次鎖 10 分鐘(從最後一次失敗起算,鎖定期間不比對密碼),同一個 email 不分 IP 每小時錯 20 次也鎖;帳號不存在也照樣計數。登入成功清掉該 email + IP 的連續失敗計數。
-  - 計數存在 `RateLimit` collection(`lib/rateLimit.ts`),IP 取自 `x-forwarded-for` 第一個值(部署平台設定;本機沒有則為 `unknown`)。
+  - 計數存在 `RateLimit` collection(`lib/rateLimit.ts`),IP 取自 `x-forwarded-for` 第一個值(正式環境經 Cloudflare Tunnel 帶入;沒有再看 `x-real-ip`,本機都沒有則為 `unknown`)。
 
 ## 資料庫結構
 
@@ -381,7 +391,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 
 | Method / 路徑 | 說明 |
 |---|---|
-| `GET /api/notifications` | 導覽列鈴鐺用,固定回傳最新 3 則公告,以及我是否已讀 |
+| `GET /api/notifications` | 導覽列鈴鐺用,固定回傳最新 5 則公告,以及我是否已讀 |
 | `POST /api/notifications/mark-read` | 把我的已讀狀態設為已讀 |
 | `GET/POST /api/admin/notifications` **(Admin)** | 列出(預設 10 筆,`?limit=` 最多 100)/ 發布新公告(`{ title, content }`,發布後重置所有使用者已讀狀態) |
 | `PUT/DELETE /api/admin/notifications/[id]` **(Admin)** | 編輯 / 刪除一則公告 |
@@ -400,7 +410,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `/register` | 註冊頁,不限制帳號數量 |
 | `/verify-email` | 輸入註冊 / 忘記密碼驗證碼,啟用帳號 |
 | `/forgot-password` | 忘記密碼:寄送驗證碼 + 設定新密碼 |
-| `/` | 未登入可見的介紹頁(用 `lib/demoData.ts` 的假資料展示功能,不接資料庫);已登入會直接 `redirect("/overview")` |
+| `/` | 未登入可見的介紹頁(用 `lib/demoData.ts` 的假資料展示功能);右上角的鈴鐺(`components/PublicNotifications.tsx`)由 server component 直接查最新 5 則系統公告顯示,不分已讀未讀;其餘展示內容不接資料庫;已登入會直接 `redirect("/overview")` |
 | `/income` | 收入總覽(列表 + 篩選) |
 | `/expense` | 支出總覽(列表 + 篩選),含信用卡分期與信用卡對帳標記。右下角浮動「+」的新增視窗上方可切換「支出 / 訂閱」(`TransactionsClient` 的 `addAlternative`);篩選列右邊的「訂閱」按鈕(帶數量)打開所有訂閱清單(`components/SubscriptionsClient.tsx`):上方每月訂閱合計,各訂閱依下次扣款日排序,左邊是分類圖示,中間是名稱與「每月 D 號 · 付款方式」,右邊是金額與「下次 M/D(N 天後)」,點一筆打開編輯,刪除在編輯表單按鈕列最右邊;清單底部也有「新增訂閱」。訂閱清單由 `ExpenseClient` 持有,異動後重抓訂閱並讓交易列表重新讀取 |
 | `/overview` | 主要整合頁面,詳見下方說明 |
@@ -485,7 +495,9 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   computeMonthSummaries.ts        // 後端:一次查多個使用者 × 多個月份的原始資料 + summarizeMonth
   getCardReconciliationStatuses.ts, getIncomingShares.ts // 獨立 API 與 /api/overview 共用的查詢
   sharedTransactions.ts           // 分享資料的型別(IncomingShare / SharedTransaction)、已納入分享的收入 / 支出加總
+  pointsDiscount.ts               // 點數折抵:netAmount()
   useIsDark.ts                    // 圖表用:目前是否深色模式
+  useMediaQuery.ts                // /income、/expense 寬螢幕(lg)改用側邊面板的判斷
   otp.ts, email.ts                // 驗證碼產生、Resend 寄信
   theme.ts                        // 主題偏好(淺色/深色/跟隨系統)讀寫
   getAdminStats.ts                // 後台:近 30 天加入人數 / 近 7 天新增交易的每日統計與升降
@@ -506,9 +518,11 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   RewardCalculator.tsx, CategoryBreakdown.tsx, KindIcon.tsx, KindPicker.tsx, Dropdown.tsx, dropdownOptions.tsx, DatePicker.tsx, BottomNav.tsx,
   SpecialDatePrompt.tsx, YearOverview.tsx, MonthRangePicker.tsx
   SharedItemsSection.tsx, SharedNote.tsx, Switch.tsx, SharedToggleButton.tsx, QuickAddButton.tsx, RoundedAmount.tsx, AddToHomeScreenGuide.tsx
-  NotificationBell.tsx, AdminNotificationClient.tsx, AdminStatsSection.tsx, AdminUsersClient.tsx, Logo.tsx, ThemeSettings.tsx
+  NotificationBell.tsx, PublicNotifications.tsx, AdminNotificationClient.tsx, AdminStatsSection.tsx, AdminUsersClient.tsx, Logo.tsx, ThemeSettings.tsx
   SettingsClient.tsx, SpecialDateForm.tsx, ChangePasswordForm.tsx, DeleteAccountForm.tsx
   ForgotPasswordForm.tsx, VerifyEmailForm.tsx
   Modal.tsx, ConfirmDialog.tsx, ToastProvider.tsx, RouteChangeToast.tsx, icons.tsx
 proxy.ts                          // 取代 middleware.ts:未登入導回 /login + sliding session
+/scripts
+  migrate-verify-existing-users.mjs // 一次性 migration:加入 email 驗證前的舊帳號標記為已驗證(讀 .env.local)
 ```
