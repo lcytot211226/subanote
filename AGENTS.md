@@ -104,6 +104,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   isDebit: boolean,       // 是否為簽帳金融卡,預設 false(舊資料沒有此欄位視為 false);只能在新增時決定,之後不能更改
   closingDate?: number,   // 結帳日,1-31;簽帳金融卡沒有這個欄位
   paymentDate?: number,   // 繳款日,1-31;簽帳金融卡沒有這個欄位
+  pattern?: string,       // 自訂圖示:16 × 16 像素畫,256 個字元(一列接一列),每字元是調色盤色號 0-f(0 = 透明);沒有就用預設的信用卡圖示
   createdAt: Date,
   updatedAt: Date
 }
@@ -149,7 +150,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
    - **Step 2:根據結帳週期,計算實際繳款月份**
      - 若卡片的 `paymentDate`(日)≤ `closingDate`(日),代表繳款日在結帳後的「下一個月」。
      - 若 `paymentDate` > `closingDate`,代表繳款日在「結帳當月」。
-   - **Step 3:若 `posted = false`(該期結帳日當下未入帳),則在 Step 2 算出的月份基礎上,再往後遞延一個月。**
+   - **Step 3:若 `posted = false`(該期結帳日當下未入帳),則在 Step 2 算出的月份基礎上,再往後遞延一個月。** **分期例外**:未入帳的分期是把整組每一期的日期往後推一個月(第一期從下個月同一天開始),日期本身已反映遞延,這一步對分期不再套用。
    - 最終算出的月份即為 `billingPeriod`。
 
    **範例**:8/10 消費,卡片 `closingDate=15`、`paymentDate=3`
@@ -322,17 +323,17 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | Method / 路徑 | 說明 |
 |---|---|
 | `GET /api/cards` | 列出我的所有卡片 |
-| `POST /api/cards` | `{ name, closingDate, paymentDate, isDebit }` 新增;`isDebit: true`(簽帳金融卡)時不需要也不存結帳日 / 繳款日 |
-| `GET/PUT/DELETE /api/cards/[id]` | 讀取/更新/刪除單張卡片;PUT 忽略 `isDebit`,卡片類型不能改(簽帳金融卡只能改名稱) |
+| `POST /api/cards` | `{ name, closingDate, paymentDate, isDebit, pattern? }` 新增;`isDebit: true`(簽帳金融卡)時不需要也不存結帳日 / 繳款日 |
+| `GET/PUT/DELETE /api/cards/[id]` | 讀取/更新/刪除單張卡片;PUT 忽略 `isDebit`,卡片類型不能改(簽帳金融卡只能改名稱與圖示)。`pattern` 沒帶不改,`null` 或整張透明移除圖示,格式不對回 400(`lib/cardPattern.ts` 的 `parsePattern()`) |
 
 ### 交易 `/api/transactions`
 
 | Method / 路徑 | 說明 |
 |---|---|
 | `GET /api/transactions` | 支援 `?type=&billingPeriod=&category=&card=` 篩選;查 `category=credit_card` 時會一併帶出 `installment`(分期本質上也是刷卡)。**讀取前一律先呼叫 `generateDueSubscriptionTransactions()` 補生成到期的訂閱交易**,確保 `/income`、`/expense`、`/overview` 永遠看得到最新結果 |
-| `POST /api/transactions` | 建立單筆交易(現金/信用卡單筆);信用卡單筆支出可帶 `pointsDiscount`(0 ~ amount,0/空值不存);自動用 `calculateBillingPeriod()` 算出 `billingPeriod` 並存入 |
-| `GET/PUT/DELETE /api/transactions/[id]` | 更新時沒帶 `pointsDiscount` 沿用原值,帶 `null`/0 或改成非信用卡單筆支出會移除該欄位;刪除若該筆有 `installmentGroupId`,會把同一組所有期數一起刪除 |
-| `POST /api/transactions/installment` | `{ item, date, card, totalAmount, totalNumber }`,一次生成整組分期交易,共用同一個 `installmentGroupId`;金額除不盡的餘數放在第一期,其餘各期平分 |
+| `POST /api/transactions` | 建立單筆交易(現金/信用卡單筆);信用卡單筆支出可帶 `pointsDiscount`(0 ~ amount,0/空值不存);自動用 `calculateBillingPeriod()` 算出 `billingPeriod` 並存入。信用卡 / 分期交易若這張卡在歸屬月份已對帳(`reconciled` / `paid`),且沒帶 `confirmReconciled: true`,回 `409 + reconciled: [{ period, status }]` 不新增(`lib/reconciledConflict.ts`),前端 `TransactionForm` 跳「帳單已對帳」確認,確認後帶 `confirmReconciled` 重送;編輯不檢查 |
+| `GET/PUT/DELETE /api/transactions/[id]` | 更新時沒帶 `pointsDiscount` 沿用原值,帶 `null`/0 或改成非信用卡單筆支出會移除該欄位;分期跟刪除一樣**整組一起改**:日期、入帳狀態、卡片、項目、分類套用到同一組每一期(改某期日期 = 整組依期數前後推;切換入帳狀態 = 整組往後 / 往前推一個月;日期都從同一個「幾號」重算,短月夾到月底不漂移,`lib/installmentDates.ts`),金額只改這一期,回應另帶 `groupTransactions`(整組);刪除若該筆有 `installmentGroupId`,會把同一組所有期數一起刪除 |
+| `POST /api/transactions/installment` | `{ item, date, card, totalAmount, totalNumber, posted? }`,一次生成整組分期交易,共用同一個 `installmentGroupId`;金額除不盡的餘數放在第一期,其餘各期平分。`posted: false`(結帳日當下未入帳,簽帳金融卡忽略)時第一期從下個月的同一天開始(各期日期都往後推一個月,各期存 `posted: false`;日期已反映遞延,`calculateBillingPeriod` 對分期不再因 `posted` 重複延)。任何一期落在這張卡已對帳的月份時,同單筆交易回 409 等使用者確認(`confirmReconciled`) |
 
 ### 訂閱 `/api/subscriptions`
 
@@ -414,14 +415,14 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `/income` | 收入總覽(列表 + 篩選) |
 | `/expense` | 支出總覽(列表 + 篩選),含信用卡分期與信用卡對帳標記。右下角浮動「+」的新增視窗上方可切換「支出 / 訂閱」(`TransactionsClient` 的 `addAlternative`);篩選列右邊的「訂閱」按鈕(帶數量)打開所有訂閱清單(`components/SubscriptionsClient.tsx`):上方每月訂閱合計,各訂閱依下次扣款日排序,左邊是分類圖示,中間是名稱與「每月 D 號 · 付款方式」,右邊是金額與「下次 M/D(N 天後)」,點一筆打開編輯,刪除在編輯表單按鈕列最右邊;清單底部也有「新增訂閱」。訂閱清單由 `ExpenseClient` 持有,異動後重抓訂閱並讓交易列表重新讀取 |
 | `/overview` | 主要整合頁面,詳見下方說明 |
-| `/cards` | 信用卡管理(`components/CardForm.tsx`):「我的卡片」標題列右邊「+ 新增」開 dialog 新增;卡片以兩欄卡片列出(簽帳金融卡紫色圖示),點整張卡片開 dialog 編輯,刪除在 dialog 按鈕列最右邊。新增時可勾選「簽帳金融卡」,勾選後隱藏結帳日 / 繳款日;編輯時鎖住無法更改。下方是**回饋試算**(`components/RewardCalculator.tsx`):標題列「+ 新增」開 dialog 建立方案(名稱 + 幾項「回饋率 % + 取底 / 四捨五入」);輸入消費金額(預設 200)後,方案清單由高到低列出回饋額(顏色點 + 名稱,最高的標「最高」;規則不顯示在外面,點一列進編輯才看得到,也在那裡刪除),下面 Recharts 折線圖(`stepAfter`,取整造成的階梯才畫得出來)畫 0 ~ 該金額的 110% 各方案的回饋比較,輸入的金額位置有一條虛線參考線(標金額),tooltip 列出該金額各方案回饋 |
+| `/cards` | 信用卡管理(`components/CardForm.tsx`):「我的卡片」標題列右邊「+ 新增」開 dialog 新增;卡片以兩欄卡片列出(簽帳金融卡紫色圖示),點整張卡片開 dialog 編輯,刪除在 dialog 按鈕列最右邊。新增時可勾選「簽帳金融卡」,勾選後隱藏結帳日 / 繳款日;編輯時鎖住無法更改。dialog 裡的「圖示」可自訂 16 × 16 像素圖示(`components/PixelEditor.tsx`):8 個模板(`PATTERN_TEMPLATES`,套用 = 把像素複製進來,之後照樣可改,不記得來自哪個模板)、16 色調色盤(`PALETTE`,色號 0 透明)、畫筆 / 橡皮擦 / 油漆桶 / 滴管、復原 / 重做、清空,支援拖曳連續畫(手機 `touch-action: none`),旁邊有實際大小預覽;「使用預設」移除圖示。有圖示的卡片在 `/cards` 列表、`/overview` 月 / 年檢視的信用卡格子、下拉選單,以及收支列表每筆交易(在收支列表放在付款方式前面、取代卡片名稱,名稱放 title 與 sr-only)都顯示這個圖示(`components/CardIcon.tsx`:`PixelIcon` 用 SVG + `crispEdges` 畫,同色連續格子合併成一個 rect;`CardIcon` 沒圖示時退回預設圖示,簽帳金融卡紫色)。下方是**回饋試算**(`components/RewardCalculator.tsx`):標題列「+ 新增」開 dialog 建立方案(名稱 + 幾項「回饋率 % + 取底 / 四捨五入」);輸入消費金額(預設 200)後,方案清單由高到低列出回饋額(顏色點 + 名稱,最高的標「最高」;規則不顯示在外面,點一列進編輯才看得到,也在那裡刪除),下面 Recharts 折線圖(`stepAfter`,取整造成的階梯才畫得出來)畫 0 ~ 該金額的 110% 各方案的回饋比較,輸入的金額位置有一條虛線參考線(標金額),tooltip 列出該金額各方案回饋 |
 | `/settings` | 個人設定(`components/SettingsClient.tsx`):最上方顯示目前登入的帳號 email(來自 `GET /api/auth/me`),下面是分組的列表式選單,點每一列在 dialog 裡打開對應內容——月結算日(`specialDate`)、外觀(淺色 / 深色 / 跟隨系統,`ThemeSettings.tsx`)、加到手機主畫面教學(`AddToHomeScreenGuide.tsx`,純說明,不做 PWA)、修改密碼、刪除帳號;另有「管理員後台」連結(僅 `isAdmin`)、「登出」與「登出所有裝置」(確認後呼叫 `POST /api/auth/logout-all`);「刪除帳號」自成一組放在最下面,跟登出等操作分開 |
 | `/admin`、`/admin/notification` | 僅 `ADMIN_EMAIL` 可進入,發布/編輯/刪除系統公告 |
 | `/admin/users` | 僅 `ADMIN_EMAIL` 可進入。上方兩張統計卡(`components/AdminStatsSection.tsx`,資料由 server component 直接呼叫 `lib/getAdminStats.ts`):**近 30 天加入人數**(依 `User.createDate`)與**近 7 天新增交易數**(依 `Transaction.createdAt`,含訂閱自動生成與分期各期),一律以台灣時間切日;每張卡附每日新增數長條圖(x 軸 M/D,窗口內沒資料的日子補 0),以及跟昨天窗口比的升降 = 今天的數量 − 昨天窗口第一天(今天往前 30 / 7 天那天)的數量。下方是使用者清單(`components/AdminUsersClient.tsx`,打 `GET /api/admin/users` 分頁 + email 搜尋) |
 
 > 導覽列(`components/Navbar.tsx`):左邊是 `components/Logo.tsx` 的 Subanote 品牌字(SVG,Pacifico 手寫體 + 品牌色漸層),中間是頁面選單(桌面版用 `grid-cols-[1fr_auto_1fr]` 讓選單真正置中),右邊是通知鈴鐺 / 設定 / 深淺色快速切換。手機版沒有漢堡選單:上方只留 Logo 與通知 / 深淺色,頁面選單與設定(收入 / 支出 / **總覽(正中間)** / 信用卡 / 設定(最右邊),各帶圖示)移到固定在底部的分頁列(`components/BottomNav.tsx`,`NAV_LINKS` 與 Navbar 共用),方便單手點;底部分頁列前有同高的佔位避免擋住內容,浮動「+」按鈕與 toast 在手機上也往上移到分頁列上方(`viewport` 設 `viewportFit: "cover"`,用 `env(safe-area-inset-bottom)` 避開 iPhone home bar)。管理員入口與登出不在導覽列,在 `/settings`。登入、註冊、驗證、忘記密碼頁與未登入首頁的標題也都用同一個 Logo。
 
-> `/income`、`/expense` 共用 `components/TransactionsClient.tsx`:只依月份向 `GET /api/transactions` 抓當月全部資料,付款方式 / 信用卡篩選都在前端過濾(選「信用卡」一併包含分期,規則同 API;收入一律是現金,所以 `/income` 不顯示付款方式篩選)。方便其他頁面導過來時直接套用篩選,月份與篩選可以用網址 query 帶入初始值(只在進頁面時讀一次,之後操作不會回寫網址):`?period=YYYY-MM&category=cash|credit_card|installment&card=<cardId>&q=<關鍵字>`(不合法的值忽略;只帶 `card` 視為信用卡篩選;`/income` 只吃 `period`、`kind` 與 `q`),收入、支出都有分類篩選(`components/KindPicker.tsx` 的 `KindFilter`;`?kind=` 也可帶入),交易 / 訂閱表單選分類用同檔的 `KindPicker`(支出 8 個圖示格子,手機 4 欄、桌面一排;收入 4 個一排),每筆交易名稱前面顯示分類圖示(`components/KindIcon.tsx`,SVG + 各分類一個顏色的圓底);切換篩選不會重新打 API;新增交易是右下角的浮動「+」按鈕(樣式同 `/overview` 手機版的快速記帳,但桌面版也顯示,列表底部留白避免被擋住;寬螢幕(`lg` 以上,`lib/useMediaQuery.ts`)新增與編輯都不開 dialog,改在列表右邊顯示固定寬度的面板(sticky,`aside[data-add-panel]`);頁面容器用 `has-[[data-add-panel]]` 從 `max-w-4xl` 加寬一個面板的寬度,列表維持原本寬度(螢幕不夠寬時才會縮),開著面板時隱藏浮動「+」,正在編輯的那筆交易外框加深,點另一筆直接換成編輯那筆;窄螢幕照舊用置中 dialog。`TransactionForm` / `SubscriptionForm` / `KindPicker` 的欄數用 container query(`@container` + `@xl:` 等)依表單本身寬度決定,放進窄面板自動變單欄,日期完整顯示,表單預設值沿用目前的篩選——付款方式、信用卡(只篩卡片時視為信用卡單筆)、分類,`TransactionForm` 的 `defaults`);列表上沒有編輯 / 刪除按鈕,點整筆交易(或鍵盤 Enter / 空白鍵)就打開編輯 dialog,刪除按鈕放在 dialog 按鈕列最右邊(`TransactionForm` 的 `onDelete`,仍會跳刪除確認;刪除成功後關閉 dialog);新增 / 編輯 / 刪除交易後也不重抓整個月份,直接用 API 回應更新本地列表(只保留 `billingPeriod` 是目前月份的交易,例如分期的其他期數、改日期跑到別的月份的會被拿掉;刪除分期依 `installmentGroupId` 把同組的其他期一起移除;新增時 API 回傳的 `card` 只是 id,由 `TransactionForm` 用手上的卡片清單補成完整卡片),只有訂閱新增/編輯/刪除(會補生成交易)才重新讀取;另有一列前端本地的名稱搜尋(可用半形/全形逗號或頓號分隔多個關鍵字,符合任一即顯示,總額跟著只算符合的項目),依日期或金額排序(旁邊共用一個方向箭頭切換高到低 / 低到高,再點一次目前已選的欄位也會反轉;日期相同時再依 `createdAt` 同方向排序,金額相同時依日期、`createdAt` 新到舊),以及列表 / 2 欄 / 3 欄的顯示方式切換(排序與顯示方式都記在 localStorage;手機版一律單欄,不顯示顯示方式切換)。
+> `/income`、`/expense` 共用 `components/TransactionsClient.tsx`:只依月份向 `GET /api/transactions` 抓當月全部資料,付款方式 / 信用卡篩選都在前端過濾(選「信用卡」一併包含分期,規則同 API;收入一律是現金,所以 `/income` 不顯示付款方式篩選)。方便其他頁面導過來時直接套用篩選,月份與篩選可以用網址 query 帶入初始值(只在進頁面時讀一次,之後操作不會回寫網址):`?period=YYYY-MM&category=cash|credit_card|installment&card=<cardId>&q=<關鍵字>`(不合法的值忽略;只帶 `card` 視為信用卡篩選;`/income` 只吃 `period`、`kind` 與 `q`),收入、支出都有分類篩選(`components/KindPicker.tsx` 的 `KindFilter`;`?kind=` 也可帶入),交易 / 訂閱表單選分類用同檔的 `KindPicker`(支出 8 個圖示格子,手機 4 欄、桌面一排;收入 4 個一排),每筆交易名稱前面顯示分類圖示(`components/KindIcon.tsx`,SVG + 各分類一個顏色的圓底);切換篩選不會重新打 API;新增交易是右下角的浮動「+」按鈕(樣式同 `/overview` 手機版的快速記帳,但桌面版也顯示,列表底部留白避免被擋住;寬螢幕(`lg` 以上,`lib/useMediaQuery.ts`)新增與編輯都不開 dialog,改在列表右邊顯示固定寬度的面板(sticky,`aside[data-add-panel]`);頁面容器用 `has-[[data-add-panel]]` 從 `max-w-4xl` 加寬一個面板的寬度,列表維持原本寬度(螢幕不夠寬時才會縮),開著面板時隱藏浮動「+」,正在編輯的那筆交易外框加深,點另一筆直接換成編輯那筆;窄螢幕照舊用置中 dialog。`TransactionForm` / `SubscriptionForm` / `KindPicker` 的欄數用 container query(`@container` + `@xl:` 等)依表單本身寬度決定,放進窄面板自動變單欄,日期完整顯示,表單預設值沿用目前的篩選——付款方式、信用卡(只篩卡片時視為信用卡單筆)、分類,`TransactionForm` 的 `defaults`);列表上沒有編輯 / 刪除按鈕,點整筆交易(或鍵盤 Enter / 空白鍵)就打開編輯 dialog,刪除按鈕放在 dialog 按鈕列最右邊(`TransactionForm` 的 `onDelete`,仍會跳刪除確認;刪除成功後關閉 dialog);新增 / 編輯 / 刪除交易後也不重抓整個月份,直接用 API 回應更新本地列表(只保留 `billingPeriod` 是目前月份的交易,例如分期的其他期數、改日期跑到別的月份的會被拿掉;刪除分期依 `installmentGroupId` 把同組的其他期一起移除,編輯分期則用 API 回傳的整組替換;新增時 API 回傳的 `card` 只是 id,由 `TransactionForm` 用手上的卡片清單補成完整卡片),只有訂閱新增/編輯/刪除(會補生成交易)才重新讀取;另有一列前端本地的名稱搜尋(可用半形/全形逗號或頓號分隔多個關鍵字,符合任一即顯示,總額跟著只算符合的項目),依日期或金額排序(旁邊共用一個方向箭頭切換高到低 / 低到高,再點一次目前已選的欄位也會反轉;日期相同時再依 `createdAt` 同方向排序,金額相同時依日期、`createdAt` 新到舊),以及列表 / 2 欄 / 3 欄的顯示方式切換(排序與顯示方式都記在 localStorage;手機版一律單欄,不顯示顯示方式切換)。
 
 ### `/overview` 頁面配置(由上到下)
 
@@ -496,16 +497,19 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   getCardReconciliationStatuses.ts, getIncomingShares.ts // 獨立 API 與 /api/overview 共用的查詢
   sharedTransactions.ts           // 分享資料的型別(IncomingShare / SharedTransaction)、已納入分享的收入 / 支出加總
   pointsDiscount.ts               // 點數折抵:netAmount()
+  reconciledConflict.ts           // 新增交易時檢查歸屬月份是否已對帳(409 讓前端確認)
   useIsDark.ts                    // 圖表用:目前是否深色模式
   useMediaQuery.ts                // /income、/expense 寬螢幕(lg)改用側邊面板的判斷
   otp.ts, email.ts                // 驗證碼產生、Resend 寄信
   theme.ts                        // 主題偏好(淺色/深色/跟隨系統)讀寫
   getAdminStats.ts                // 後台:近 30 天加入人數 / 近 7 天新增交易的每日統計與升降
   rewardPlan.ts                   // 回饋試算:計算、規則驗證、方案顏色
+  cardPattern.ts                  // 信用卡自訂像素圖示:調色盤、格式驗證、模板
   security.ts, rateLimit.ts       // 驗證碼次數、寄信頻率、登入鎖定的限制與邏輯;頻率限制計數(RateLimit)
   expenseKind.ts, incomeKind.ts, transactionKind.ts // 交易分類(支出 / 收入兩組 + 共用邏輯)
   useDismiss.ts                   // 彈出面板點外面 / Esc 關閉
   cardsCache.ts                   // 快速記帳用的信用卡清單 localStorage 快取
+  installmentDates.ts             // 分期各期日期(錨定同一個「幾號」+ 未入帳整組推一個月)
   addMonths.ts, period.ts, usePeriod.ts, demoData.ts
   models/
     User.ts, Card.ts, Transaction.ts, Subscription.ts, Utility.ts,
@@ -513,7 +517,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 /components
   Navbar.tsx, ThemeToggle.tsx, MonthPicker.tsx, OverviewChart.tsx, OverviewClient.tsx
   TransactionForm.tsx, TransactionsClient.tsx, ExpenseClient.tsx
-  CardForm.tsx, UtilityInlineEditor.tsx
+  CardForm.tsx, CardIcon.tsx, PixelEditor.tsx, UtilityInlineEditor.tsx
   SubscriptionForm.tsx, SubscriptionsClient.tsx
   RewardCalculator.tsx, CategoryBreakdown.tsx, KindIcon.tsx, KindPicker.tsx, Dropdown.tsx, dropdownOptions.tsx, DatePicker.tsx, BottomNav.tsx,
   SpecialDatePrompt.tsx, YearOverview.tsx, MonthRangePicker.tsx

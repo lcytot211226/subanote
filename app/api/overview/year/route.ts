@@ -71,6 +71,6 @@ export async function GET(request: Request) {
   return NextResponse.json({
     year,
     months,
-    cards: cards.map((c) => ({ _id: String(c._id), name: c.name, isDebit: !!c.isDebit })),
+    cards: cards.map((c) => ({ _id: String(c._id), name: c.name, isDebit: !!c.isDebit, pattern: c.pattern ?? null })),
   });
 }

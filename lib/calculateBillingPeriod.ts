@@ -63,8 +63,10 @@ export function calculateBillingPeriod(
       ? shiftMonth(closingCycle.year, closingCycle.month, 1)
       : closingCycle;
 
-  // Step 3: 若 posted = false,再往後遞延一個月
-  const finalCycle = posted ? paymentCycle : shiftMonth(paymentCycle.year, paymentCycle.month, 1);
+  // Step 3: 若 posted = false,再往後遞延一個月。
+  // 分期例外:未入帳的分期是把整組每一期的日期往後推一個月(見 lib/installmentDates.ts),日期本身已經反映遞延,這裡不再重複延。
+  const finalCycle =
+    posted || category === "installment" ? paymentCycle : shiftMonth(paymentCycle.year, paymentCycle.month, 1);
 
   return formatYearMonth(finalCycle.year, finalCycle.month);
 }

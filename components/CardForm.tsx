@@ -5,6 +5,9 @@ import { useState, type FormEvent } from "react";
 import ConfirmDialog from "./ConfirmDialog";
 import Modal from "./Modal";
 import { CreditCardIcon, PlusIcon } from "./icons";
+import CardIcon, { PixelIcon } from "./CardIcon";
+import PixelEditor from "./PixelEditor";
+import { EMPTY_PATTERN } from "@/lib/cardPattern";
 
 export type CardDTO = {
   _id: string;
@@ -13,9 +16,11 @@ export type CardDTO = {
   isDebit?: boolean;
   closingDate: number | null;
   paymentDate: number | null;
+  /** 自訂圖示(16 × 16 像素畫,lib/cardPattern.ts);沒有就用預設的信用卡圖示 */
+  pattern?: string | null;
 };
 
-const emptyForm = { name: "", isDebit: false, closingDate: "", paymentDate: "" };
+const emptyForm = { name: "", isDebit: false, closingDate: "", paymentDate: "", pattern: null as string | null };
 
 const INPUT =
   "w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50";
@@ -32,11 +37,13 @@ export default function CardForm({ initialCards }: { initialCards: CardDTO[] }) 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CardDTO | null>(null);
+  const [editingPattern, setEditingPattern] = useState(false);
 
   function openAdd() {
     setEditingId(null);
     setForm(emptyForm);
     setError(null);
+    setEditingPattern(false);
     setOpen(true);
   }
 
@@ -47,8 +54,10 @@ export default function CardForm({ initialCards }: { initialCards: CardDTO[] }) 
       isDebit: !!card.isDebit,
       closingDate: card.closingDate != null ? String(card.closingDate) : "",
       paymentDate: card.paymentDate != null ? String(card.paymentDate) : "",
+      pattern: card.pattern ?? null,
     });
     setError(null);
+    setEditingPattern(false);
     setOpen(true);
   }
 
@@ -61,13 +70,15 @@ export default function CardForm({ initialCards }: { initialCards: CardDTO[] }) 
     setError(null);
     setSubmitting(true);
 
+    // pattern 為 null(或整張透明)時後端會移除圖示,回到預設圖示
     const payload = form.isDebit
-      ? { name: form.name, isDebit: true }
+      ? { name: form.name, isDebit: true, pattern: form.pattern }
       : {
           name: form.name,
           isDebit: false,
           closingDate: Number(form.closingDate),
           paymentDate: Number(form.paymentDate),
+          pattern: form.pattern,
         };
 
     const res = await fetch(editingId ? `/api/cards/${editingId}` : "/api/cards", {
@@ -135,16 +146,22 @@ export default function CardForm({ initialCards }: { initialCards: CardDTO[] }) 
               }}
               className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800/60"
             >
-              {/* 簽帳金融卡用紫色圖示區分,同 /overview */}
-              <span
-                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                  card.isDebit
-                    ? "bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400"
-                    : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
-                }`}
-              >
-                <CreditCardIcon className="h-5 w-5" />
-              </span>
+              {/* 有自訂像素圖示就直接畫;否則是圓底的預設圖示,簽帳金融卡用紫色區分,同 /overview */}
+              {card.pattern ? (
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center">
+                  <PixelIcon pattern={card.pattern} className="h-8 w-8" />
+                </span>
+              ) : (
+                <span
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                    card.isDebit
+                      ? "bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400"
+                      : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+                  }`}
+                >
+                  <CreditCardIcon className="h-5 w-5" />
+                </span>
+              )}
               <div className="min-w-0">
                 <p className="truncate font-medium text-zinc-900 dark:text-zinc-50">{card.name}</p>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -221,6 +238,47 @@ export default function CardForm({ initialCards }: { initialCards: CardDTO[] }) 
               </span>
             </span>
           </label>
+
+          {/* 自訂圖示:16 × 16 像素畫,用在總覽、收支列表、下拉選單等顯示卡片的地方 */}
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">圖示</span>
+              <span className="flex h-6 w-6 items-center justify-center">
+                <CardIcon card={{ isDebit: form.isDebit, pattern: form.pattern }} className="h-5 w-5" />
+              </span>
+              <div className="ml-auto flex gap-2">
+                {form.pattern && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForm({ ...form, pattern: null });
+                      setEditingPattern(false);
+                    }}
+                    className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+                  >
+                    使用預設
+                  </button>
+                )}
+                {!editingPattern && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingPattern(true)}
+                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    {form.pattern ? "編輯圖示" : "自訂圖示"}
+                  </button>
+                )}
+              </div>
+            </div>
+            {editingPattern && (
+              <div className="mt-3">
+                <PixelEditor
+                  value={form.pattern ?? EMPTY_PATTERN}
+                  onChange={(next) => setForm((f) => ({ ...f, pattern: next === EMPTY_PATTERN ? null : next }))}
+                />
+              </div>
+            )}
+          </div>
 
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 

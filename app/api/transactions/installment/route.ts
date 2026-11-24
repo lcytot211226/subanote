@@ -4,8 +4,9 @@ import { connectToDatabase } from "@/lib/mongodb";
 import Transaction from "@/lib/models/Transaction";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
+import { reconciledConflictResponse } from "@/lib/reconciledConflict";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
-import { addMonthsClamped } from "@/lib/addMonths";
+import { installmentDate } from "@/lib/installmentDates";
 import { DEFAULT_EXPENSE_KIND, isExpenseKind } from "@/lib/expenseKind";
 
 /** 建立一筆分期購買:一次生成 totalNumber 筆交易(每期一筆),共用同一個 installmentGroupId。 */
@@ -15,7 +16,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未登入" }, { status: 401 });
   }
 
-  const { item, date, card, totalAmount, totalNumber, kind } = await request.json();
+  const { item, date, card, totalAmount, totalNumber, kind, posted, confirmReconciled } = await request.json();
 
   if (!item || !date || !card || !totalAmount || !totalNumber) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
@@ -34,8 +35,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "找不到卡片" }, { status: 404 });
   }
   const cardBillingInfo = toCardBillingInfo(cardDoc);
+  // 結帳日當下未入帳:整組分期從下個月的同一天開始算(簽帳金融卡沒有結帳日,一律視為已入帳)。
+  // 日期已經往後推了,calculateBillingPeriod 對分期不會再因 posted = false 重複遞延。
+  const isPosted = posted !== false || !!cardBillingInfo.isDebit;
 
   const purchaseDate = new Date(date);
+  const anchor = {
+    year: purchaseDate.getUTCFullYear(),
+    month: purchaseDate.getUTCMonth(),
+    day: purchaseDate.getUTCDate(),
+  };
   const installmentGroupId = new mongoose.Types.ObjectId();
 
   // 除不盡的餘數放在第一期,其餘各期金額相同。
@@ -43,9 +52,9 @@ export async function POST(request: Request) {
   const firstPeriodAmount = totalAmount - perPeriodAmount * (totalNumber - 1);
 
   const docs = Array.from({ length: totalNumber }, (_, i) => {
-    const periodDate = addMonthsClamped(purchaseDate, i);
+    const periodDate = installmentDate(anchor, i, isPosted ? 0 : 1);
     const amount = i === 0 ? firstPeriodAmount : perPeriodAmount;
-    const billingPeriod = calculateBillingPeriod(periodDate, "installment", true, cardBillingInfo);
+    const billingPeriod = calculateBillingPeriod(periodDate, "installment", isPosted, cardBillingInfo);
 
     return {
       user: auth.userId,
@@ -57,11 +66,21 @@ export async function POST(request: Request) {
       card,
       installmentInfo: { currentNumber: i + 1, totalNumber },
       amount,
-      posted: true,
+      posted: isPosted,
       billingPeriod,
       installmentGroupId,
     };
   });
+
+  // 任何一期落在這張卡已對帳的月份:先回 409 讓前端確認
+  if (!cardBillingInfo.isDebit && !confirmReconciled) {
+    const conflict = await reconciledConflictResponse(
+      auth.userId,
+      card,
+      docs.map((d) => d.billingPeriod)
+    );
+    if (conflict) return conflict;
+  }
 
   const transactions = await Transaction.insertMany(docs);
 

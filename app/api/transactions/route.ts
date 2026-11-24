@@ -3,6 +3,7 @@ import { connectToDatabase } from "@/lib/mongodb";
 import Transaction from "@/lib/models/Transaction";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
+import { reconciledConflictResponse } from "@/lib/reconciledConflict";
 import { calculateBillingPeriod, toCardBillingInfo } from "@/lib/calculateBillingPeriod";
 import { generateDueSubscriptionTransactions } from "@/lib/generateSubscriptionTransactions";
 import { parsePointsDiscount } from "@/lib/pointsDiscount";
@@ -46,7 +47,8 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount, kind } = body;
+  const { type, date, category, item, card, installmentInfo, amount, posted, pointsDiscount, kind, confirmReconciled } =
+    body;
 
   if (!type || !date || !category || !item || amount === undefined) {
     return NextResponse.json({ error: "缺少必要欄位" }, { status: 400 });
@@ -76,6 +78,12 @@ export async function POST(request: Request) {
 
   const isPosted = posted ?? true;
   const billingPeriod = calculateBillingPeriod(new Date(date), category, isPosted, cardBillingInfo);
+
+  // 這張卡在歸屬月份已經對帳:先回 409 讓前端確認,確認後才真的新增
+  if (cardBillingInfo && !cardBillingInfo.isDebit && !confirmReconciled) {
+    const conflict = await reconciledConflictResponse(auth.userId, card, [billingPeriod]);
+    if (conflict) return conflict;
+  }
 
   const transaction = await Transaction.create({
     user: auth.userId,

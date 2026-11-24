@@ -22,6 +22,7 @@ export default async function CardsPage() {
     isDebit: !!card.isDebit,
     closingDate: card.closingDate ?? null,
     paymentDate: card.paymentDate ?? null,
+    pattern: card.pattern ?? null,
   }));
 
   const planDTOs: RewardPlanDTO[] = plans.map((plan) => ({

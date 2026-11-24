@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ComponentType } from "react";
 import Link from "next/link";
+import CardIcon from "./CardIcon";
 import MonthPicker from "./MonthPicker";
 import OverviewChart, { type DailyExpense } from "./OverviewChart";
 import CategoryBreakdown from "./CategoryBreakdown";
@@ -222,6 +223,7 @@ export default function OverviewClient() {
     id: c._id,
     name: c.name,
     isDebit: !!c.isDebit,
+    pattern: c.pattern,
     total: cardTotalById.get(c._id) ?? 0,
   }));
   const cardsTotal = cardBreakdown.reduce((sum, c) => sum + c.total, 0);
@@ -489,14 +491,8 @@ export default function OverviewClient() {
                     />
                     <div className="mb-1 flex items-center justify-between gap-1">
                       <p className="flex min-w-0 items-center gap-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
-                        {card.isDebit ? (
-                          // 簽帳金融卡:同一個信用卡圖示塗成紫色(CSS 的 fill 會蓋過 svg 上的 fill="none")
-                          <span title="簽帳金融卡" className="shrink-0">
-                            <CreditCardIcon className="h-3.5 w-3.5 fill-violet-100 text-violet-600 dark:fill-violet-900/60 dark:text-violet-400" />
-                          </span>
-                        ) : (
-                          <CreditCardIcon className="h-3.5 w-3.5 shrink-0" />
-                        )}
+                        {/* 自訂像素圖示;沒有就是預設圖示(簽帳金融卡紫色) */}
+                        <CardIcon card={card} />
                         <span className="truncate">{card.name}</span>
                       </p>
                       {/* 簽帳金融卡沒有帳單,不需要對帳 */}

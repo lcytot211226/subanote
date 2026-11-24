@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongodb";
 import Card from "@/lib/models/Card";
 import { requireAuth } from "@/lib/auth";
+import { parsePattern } from "@/lib/cardPattern";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -27,7 +28,12 @@ export async function PUT(request: Request, { params }: Context) {
   }
 
   const { id } = await params;
-  const { name, closingDate, paymentDate } = await request.json();
+  const { name, closingDate, paymentDate, pattern } = await request.json();
+  // pattern:沒帶 = 不改,null / 整張透明 = 移除圖示
+  const parsedPattern = parsePattern(pattern);
+  if ("error" in parsedPattern) {
+    return NextResponse.json({ error: parsedPattern.error }, { status: 400 });
+  }
 
   await connectToDatabase();
   const existing = await Card.findOne({ _id: id, user: auth.userId });
@@ -43,7 +49,11 @@ export async function PUT(request: Request, { params }: Context) {
 
   const card = await Card.findOneAndUpdate(
     { _id: id, user: auth.userId },
-    existing.isDebit ? { name } : { name, closingDate, paymentDate },
+    {
+      ...(existing.isDebit ? { name } : { name, closingDate, paymentDate }),
+      ...(parsedPattern.value ? { pattern: parsedPattern.value } : {}),
+      ...(parsedPattern.value === null ? { $unset: { pattern: 1 } } : {}),
+    },
     { new: true, runValidators: true }
   );
   return NextResponse.json({ card });

@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import { useIsDark } from "@/lib/useIsDark";
+import CardIcon from "./CardIcon";
 import Modal from "./Modal";
 import SharedToggleButton from "./SharedToggleButton";
 import SharedNote from "./SharedNote";
@@ -47,7 +48,7 @@ type YearMonth = {
   sharedUtility: number;
 };
 
-type YearCard = { _id: string; name: string; isDebit: boolean };
+type YearCard = { _id: string; name: string; isDebit: boolean; pattern?: string | null };
 
 type YearData = { year: number; months: YearMonth[]; cards: YearCard[] };
 
@@ -116,11 +117,24 @@ function Stat({ label, value, Icon, note }: { label: string; value: string; Icon
   );
 }
 
-function Tile({ label, value, Icon, note }: { label: string; value: string; Icon: typeof ScaleIcon; note?: ReactNode }) {
+function Tile({
+  label,
+  value,
+  Icon,
+  icon,
+  note,
+}: {
+  label: string;
+  value: string;
+  Icon?: typeof ScaleIcon;
+  /** 直接給圖示元素(例如信用卡的自訂像素圖示),優先於 Icon */
+  icon?: ReactNode;
+  note?: ReactNode;
+}) {
   return (
     <div className="rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-800">
       <p className="flex items-center justify-center gap-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
-        <Icon className="h-3.5 w-3.5 shrink-0" />
+        {icon ?? (Icon && <Icon className="h-3.5 w-3.5 shrink-0" />)}
         <span className="truncate">{label}</span>
       </p>
       <p className="break-words font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
@@ -204,10 +218,10 @@ export default function YearOverview({
   const cardNameById = new Map((data?.cards ?? []).map((c) => [c._id, c.name]));
   // 先列現有的卡(依建立順序),再列已刪除但這年還有金額的卡
   const cardRows = [
-    ...(data?.cards ?? []).map((c) => ({ id: c._id, name: c.name, total: cardTotals.get(c._id) ?? 0 })),
+    ...(data?.cards ?? []).map((c) => ({ id: c._id, name: c.name, total: cardTotals.get(c._id) ?? 0, card: c })),
     ...Array.from(cardTotals)
       .filter(([id]) => !cardNameById.has(id))
-      .map(([id, total]) => ({ id, name: "已刪除的信用卡", total })),
+      .map(([id, total]) => ({ id, name: "已刪除的信用卡", total, card: {} })),
   ];
 
   return (
@@ -405,7 +419,7 @@ export default function YearOverview({
               </div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {cardRows.map((c) => (
-                  <Tile key={c.id} label={c.name} value={money(c.total)} Icon={CreditCardIcon} />
+                  <Tile key={c.id} label={c.name} value={money(c.total)} icon={<CardIcon card={c.card} />} />
                 ))}
               </div>
             </>

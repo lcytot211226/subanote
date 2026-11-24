@@ -22,6 +22,8 @@ const CardSchema = new Schema(
       min: 1,
       max: 31,
     },
+    // 自訂圖示:16 × 16 像素畫,256 個 0-f 的色號字串(lib/cardPattern.ts);沒有就用預設的信用卡圖示
+    pattern: { type: String, match: /^[0-9a-f]{256}$/ },
   },
   { timestamps: true }
 );

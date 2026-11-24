@@ -8,6 +8,8 @@ import { KindPicker } from "./KindPicker";
 import Dropdown from "./Dropdown";
 import DatePicker, { toDateString } from "./DatePicker";
 import { cardOptions, paymentOption } from "./dropdownOptions";
+import ConfirmDialog from "./ConfirmDialog";
+import type { ReconciledConflict } from "@/lib/reconciledConflict";
 
 type TransactionCategory = "installment" | "cash" | "credit_card";
 
@@ -41,8 +43,8 @@ export default function TransactionForm({
   transaction?: TransactionDTO;
   /** 新增時的預設值(例如沿用列表目前的篩選條件);編輯既有交易時忽略。 */
   defaults?: { category?: TransactionCategory; card?: string; kind?: TransactionKind };
-  /** 編輯既有交易成功後呼叫(通常會關閉表單),帶入更新後的交易。 */
-  onSaved: (transaction: TransactionDTO) => void;
+  /** 編輯既有交易成功後呼叫(通常會關閉表單),帶入更新後的交易;分期會另外帶入整組更新後的每一期。 */
+  onSaved: (transaction: TransactionDTO, group?: TransactionDTO[]) => void;
   /** 新增交易成功後呼叫(表單會保持開啟,方便連續輸入多筆),帶入新建立的交易(分期會是整組每一期)。 */
   onAdded?: (transactions: TransactionDTO[]) => void;
   onCancel?: () => void;
@@ -73,6 +75,8 @@ export default function TransactionForm({
   const [posted, setPosted] = useState(transaction?.posted ?? true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 新增到這張卡已對帳的月份時,後端回 409,這裡跳確認;確認後帶 confirmReconciled 重送
+  const [reconciledConflict, setReconciledConflict] = useState<ReconciledConflict[] | null>(null);
 
   // 新增分期:一次輸入總金額+總期數,後端會自動生成每一期,而不是手動輸入單一一期的金額。
   const isCreatingInstallmentGroup = category === "installment" && !transaction;
@@ -89,6 +93,17 @@ export default function TransactionForm({
       setError("請選擇信用卡");
       return;
     }
+    await submit(false);
+  }
+
+  /** 後端回 409 + reconciled(歸屬月份已對帳)時改跳確認,回傳 true 代表已處理 */
+  function handleReconciledConflict(res: Response, data: { reconciled?: ReconciledConflict[] }) {
+    if (res.status !== 409 || !data.reconciled) return false;
+    setReconciledConflict(data.reconciled);
+    return true;
+  }
+
+  async function submit(confirmReconciled: boolean) {
     setSubmitting(true);
 
     if (isCreatingInstallmentGroup) {
@@ -102,11 +117,15 @@ export default function TransactionForm({
           card: cardId,
           totalAmount: Number(totalAmount),
           totalNumber: Number(totalNumber),
+          // 簽帳金融卡沒有結帳日,一律視為已入帳
+          posted: isDebitCard ? true : posted,
+          confirmReconciled,
         }),
       });
       const data = await res.json();
 
       setSubmitting(false);
+      if (handleReconciledConflict(res, data)) return;
       if (!res.ok) {
         setError(data.error ?? "儲存失敗");
         return;
@@ -139,11 +158,13 @@ export default function TransactionForm({
     const res = await fetch(transaction ? `/api/transactions/${transaction._id}` : "/api/transactions", {
       method: transaction ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      // 只有新增會檢查對帳狀態(編輯不檢查)
+      body: JSON.stringify(transaction ? payload : { ...payload, confirmReconciled }),
     });
     const data = await res.json();
 
     setSubmitting(false);
+    if (handleReconciledConflict(res, data)) return;
     if (!res.ok) {
       setError(data.error ?? "儲存失敗");
       return;
@@ -151,7 +172,8 @@ export default function TransactionForm({
 
     const saved = withCard(data.transaction as SavedTransaction, cards);
     if (transaction) {
-      onSaved(saved);
+      const group = data.groupTransactions as SavedTransaction[] | undefined;
+      onSaved(saved, group?.map((t) => withCard(t, cards)));
       return;
     }
 
@@ -220,9 +242,6 @@ export default function TransactionForm({
         <div className="@xl:col-span-3">
           <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">分類</label>
           <KindPicker type={type} value={kind} onChange={setKind} />
-          {transaction?.installmentGroupId && (
-            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">同一組分期的每一期會一起改</p>
-          )}
         </div>
 
         <div>
@@ -315,13 +334,24 @@ export default function TransactionForm({
             </div>
           ))}
 
-        {category !== "cash" && !isCreatingInstallmentGroup && !isDebitCard && (
-          <div className="flex items-end">
+        {category !== "cash" && !isDebitCard && (
+          <div className="flex flex-col justify-end">
             <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
               <input type="checkbox" checked={posted} onChange={(e) => setPosted(e.target.checked)} />
               結帳日當下已入帳
             </label>
+            {category === "installment" && (isCreatingInstallmentGroup ? !posted : posted !== transaction?.posted) && (
+              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                {posted ? "整組分期會提前一個月。" : "第一期從下個月的同一天開始算。"}
+              </p>
+            )}
           </div>
+        )}
+
+        {transaction?.installmentGroupId && (
+          <p className="text-xs text-zinc-400 @xl:col-span-3 dark:text-zinc-500">
+            日期、卡片、入帳狀態、項目與分類會整組一起改(其他期數跟著往前 / 往後推),金額只改這一期。
+          </p>
         )}
 
         {error && <p className="text-sm text-red-600 @xl:col-span-3 dark:text-red-400">{error}</p>}
@@ -355,6 +385,28 @@ export default function TransactionForm({
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={!!reconciledConflict}
+        title="帳單已對帳"
+        message={reconciledMessage(cards.find((c) => c._id === cardId)?.name ?? "這張卡", reconciledConflict ?? [])}
+        confirmLabel={isCreatingInstallmentGroup ? "仍要建立" : "仍要新增"}
+        danger={false}
+        onConfirm={() => {
+          setReconciledConflict(null);
+          void submit(true);
+        }}
+        onCancel={() => setReconciledConflict(null)}
+      />
     </form>
   );
+}
+
+function reconciledMessage(cardName: string, conflicts: ReconciledConflict[]) {
+  const months = conflicts
+    .map((c) => {
+      const [y, m] = c.period.split("-");
+      return `${y} 年 ${Number(m)} 月(${c.status === "paid" ? "已繳費" : "已對帳"})`;
+    })
+    .join("、");
+  return `「${cardName}」${months}的帳單已經對過帳,這筆會算進那期帳單,對帳金額會跟著改變。確定要新增嗎?`;
 }

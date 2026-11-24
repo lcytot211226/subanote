@@ -21,6 +21,7 @@ import { useMediaQuery } from "@/lib/useMediaQuery";
 import { netAmount } from "@/lib/pointsDiscount";
 import { isKindFor, kindOf, type TransactionKind } from "@/lib/transactionKind";
 import KindIcon from "./KindIcon";
+import { PixelIcon } from "./CardIcon";
 import { KindFilter } from "./KindPicker";
 import Dropdown from "./Dropdown";
 import { ALL_ICON, cardOptions, paymentOption } from "./dropdownOptions";
@@ -217,17 +218,18 @@ export default function TransactionsClient({
     if (visible.length > 0) setTransactions((prev) => [...prev, ...visible]);
   }
 
-  function handleSaved(saved: TransactionDTO) {
-    const groupId = saved.installmentGroupId;
+  function handleSaved(saved: TransactionDTO, group?: TransactionDTO[]) {
+    // 分期是整組一起改(日期可能整組前後推一個月),換成後端回傳的整組,只留歸屬這個月份的那幾期
+    if (group) {
+      const groupId = saved.installmentGroupId;
+      setTransactions((prev) => [
+        ...prev.filter((t) => t.installmentGroupId !== groupId && t._id !== saved._id),
+        ...group.filter(belongsHere),
+      ]);
+      return;
+    }
     setTransactions((prev) =>
-      (belongsHere(saved)
-        ? prev.map((t) => (t._id === saved._id ? saved : t))
-        : prev.filter((t) => t._id !== saved._id)
-      )
-        // 同一組分期共用分類,後端已經整組更新,這裡同步其他期數(若剛好也在這個月份)
-        .map((t) =>
-          groupId && t._id !== saved._id && t.installmentGroupId === groupId ? { ...t, kind: saved.kind } : t
-        )
+      belongsHere(saved) ? prev.map((t) => (t._id === saved._id ? saved : t)) : prev.filter((t) => t._id !== saved._id)
     );
   }
 
@@ -330,9 +332,9 @@ export default function TransactionsClient({
       cards={initialCards}
       transaction={editing ?? undefined}
       defaults={editing ? undefined : addDefaults}
-      onSaved={(saved) => {
+      onSaved={(saved, group) => {
         closeForm();
-        handleSaved(saved);
+        handleSaved(saved, group);
       }}
       onAdded={handleAdded}
       onCancel={closeForm}
@@ -521,8 +523,17 @@ export default function TransactionsClient({
                 <div className="min-w-0">
                   <p className="font-medium text-zinc-900 dark:text-zinc-50">{t.item}</p>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                    {t.date.slice(0, 10)} · {CATEGORY_LABEL[t.category]}
-                    {t.card ? ` · ${t.card.name}` : ""}
+                    {t.date.slice(0, 10)} ·{" "}
+                    {/* 有自訂像素圖示的卡片:圖示放在付款方式前面,並取代卡片名稱(滑鼠移上去 / 螢幕閱讀器仍有名稱);
+                        負的上下 margin 讓比字大的圖示不會把這一行撐高 */}
+                    {t.card?.pattern && (
+                      <span title={t.card.name} className="-my-1 mr-1 inline-block align-middle">
+                        <PixelIcon pattern={t.card.pattern} className="h-6 w-6" />
+                        <span className="sr-only">{t.card.name}</span>
+                      </span>
+                    )}
+                    {CATEGORY_LABEL[t.category]}
+                    {t.card && !t.card.pattern ? ` · ${t.card.name}` : ""}
                     {t.installmentInfo
                       ? ` · 第${t.installmentInfo.currentNumber}/${t.installmentInfo.totalNumber}期`
                       : ""}
