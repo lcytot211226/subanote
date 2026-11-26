@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { HIDDEN_PATHS, NAV_LINKS } from "./Navbar";
-import { Cog6ToothIcon } from "./icons";
+import { Cog6ToothIcon, MagnifyingGlassIcon } from "./icons";
 
-// 手機底部分頁列:「總覽」放在正中間(最常用、拇指最好按),最右邊是設定(手機版上方導覽列不放設定按鈕)。
-const BOTTOM_ORDER = ["/income", "/expense", "/overview", "/cards"];
-const BOTTOM_LINKS = [
+// 手機底部分頁列:「總覽」放在正中間(最常用、拇指最好按),右邊是搜尋與設定(手機版上方導覽列不放搜尋 / 設定按鈕)。
+// 信用卡不在這裡,改從設定頁的「信用卡」進入,所以在 /cards 時設定分頁亮起(activePaths)。
+const BOTTOM_ORDER = ["/income", "/expense", "/overview"];
+const BOTTOM_LINKS: { href: string; label: string; Icon: typeof Cog6ToothIcon; activePaths?: string[] }[] = [
   ...BOTTOM_ORDER.map((href) => NAV_LINKS.find((l) => l.href === href)!),
-  { href: "/settings", label: "設定", Icon: Cog6ToothIcon },
+  { href: "/search", label: "搜尋", Icon: MagnifyingGlassIcon },
+  { href: "/settings", label: "設定", Icon: Cog6ToothIcon, activePaths: ["/cards"] },
 ];
 
 /**
@@ -32,8 +34,8 @@ export default function BottomNav() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden dark:border-zinc-800 dark:bg-black/90"
       >
         <ul className="grid h-16 grid-cols-5">
-          {BOTTOM_LINKS.map(({ href, label, Icon }) => {
-            const active = pathname.startsWith(href);
+          {BOTTOM_LINKS.map(({ href, label, Icon, activePaths = [] }) => {
+            const active = [href, ...activePaths].some((p) => pathname.startsWith(p));
             return (
               <li key={href}>
                 <Link

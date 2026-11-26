@@ -11,6 +11,7 @@ import {
   ChartBarIcon,
   Cog6ToothIcon,
   CreditCardIcon,
+  MagnifyingGlassIcon,
 } from "./icons";
 
 /** 頁面選單:桌面版在導覽列中間,手機版改成底部分頁列(BottomNav),拇指比較好按。 */
@@ -23,6 +24,25 @@ export const NAV_LINKS = [
 
 /** 未登入的頁面不顯示導覽列 / 底部分頁列 */
 export const HIDDEN_PATHS = ["/", "/login", "/register", "/verify-email", "/forgot-password"];
+
+function SearchLink({ active }: { active: boolean }) {
+  return (
+    <Link
+      href="/search"
+      aria-label="搜尋紀錄"
+      title="搜尋紀錄"
+      aria-current={active ? "page" : undefined}
+      // 手機版的搜尋在底部分頁列(BottomNav),這裡只在 sm 以上顯示
+      className={`hidden rounded-md border p-2 hover:bg-zinc-100 sm:block dark:hover:bg-zinc-800 ${
+        active
+          ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-50"
+          : "border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200"
+      }`}
+    >
+      <MagnifyingGlassIcon className="h-5 w-5" />
+    </Link>
+  );
+}
 
 function SettingsLink() {
   return (
@@ -72,6 +92,7 @@ export default function Navbar() {
         </nav>
 
         <div className="flex items-center gap-2 justify-self-end sm:gap-3">
+          <SearchLink active={pathname.startsWith("/search")} />
           <NotificationBell />
           <SettingsLink />
           <ThemeToggle />

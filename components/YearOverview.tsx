@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  Bar,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import { useIsDark } from "@/lib/useIsDark";
@@ -24,8 +35,7 @@ import {
 } from "./icons";
 
 const INCOME_COLOR = { light: "#1a9b68", dark: "#27a674" };
-// 紅綠對色盲讀者分辨度偏低(validator CVD ΔE ≈ 6,落在需要輔助編碼的區間):
-// 收入固定在每組長條的左邊、支出在右,加上圖例與 tooltip 文字標示,不單靠顏色區分
+// 收入固定在每組長條的左邊、支出在右,加上圖例與 tooltip 文字標示;結餘圖表正數用收入色、負數用支出色
 const EXPENSE_COLOR = { light: "#e5484d", dark: "#e34948" };
 
 type YearMonth = {
@@ -52,7 +62,17 @@ type YearCard = { _id: string; name: string; isDebit: boolean; pattern?: string 
 
 type YearData = { year: number; months: YearMonth[]; cards: YearCard[] };
 
-type ChartRow = YearMonth & { label: string };
+/** cumulative:從統計區間第一個月累加到這個月的結餘 */
+type ChartRow = YearMonth & { label: string; cumulative: number };
+
+/** 年度圖表的三種檢視:收入 vs 支出、每月結餘(以 0 為基準正負分開)、累積結餘 */
+type ChartMode = "flow" | "balance" | "cumulative";
+
+const CHART_MODES: { value: ChartMode; label: string; title: string }[] = [
+  { value: "flow", label: "收支", title: "每月收支" },
+  { value: "balance", label: "結餘", title: "每月結餘" },
+  { value: "cumulative", label: "累積", title: "累積結餘" },
+];
 
 /** 共享計入統計時,跟月檢視一樣:共享收入加進收入、共享支出加進支出(各分項也加上共享的部分),結餘跟著重算。 */
 function withShared(m: YearMonth): YearMonth {
@@ -85,7 +105,8 @@ function MonthTooltip({
   payload,
   isDark,
   gridColor,
-}: TooltipContentProps<ValueType, NameType> & { isDark: boolean; gridColor: string }) {
+  mode,
+}: TooltipContentProps<ValueType, NameType> & { isDark: boolean; gridColor: string; mode: ChartMode }) {
   if (!active || !payload || payload.length === 0) return null;
   const row = payload[0].payload as ChartRow;
   const muted = isDark ? "text-zinc-400" : "text-zinc-500";
@@ -100,6 +121,7 @@ function MonthTooltip({
       <p className={`mt-1 text-xs ${muted}`}>收入 {money(row.income)}</p>
       <p className={`text-xs ${muted}`}>支出 {money(row.expense)}</p>
       <p className={`text-xs ${muted}`}>結餘 {money(row.balance)}</p>
+      {mode === "cumulative" && <p className={`text-xs font-medium ${strong}`}>累積 {money(row.cumulative)}</p>}
     </div>
   );
 }
@@ -167,6 +189,7 @@ export default function YearOverview({
   // 統計的月份區間,記著是哪一年選的;換一年就回到預設的 1–12 月
   const [rangeOverride, setRangeOverride] = useState<{ year: number; range: MonthRange } | null>(null);
   const [showTable, setShowTable] = useState(false);
+  const [chartMode, setChartMode] = useState<ChartMode>("flow");
 
   useEffect(() => {
     let ignore = false;
@@ -209,7 +232,27 @@ export default function YearOverview({
   const balance = sumOf(months, "balance");
   // 平均只算有收支紀錄的月份,未來或沒記帳的月份不拉低平均
   const activeMonths = months.filter((m) => m.income !== 0 || m.expense !== 0).length;
-  const rows: ChartRow[] = months.map((m) => ({ ...m, label: `${Number(m.period.slice(5))}月` }));
+  const rows: ChartRow[] = [];
+  for (const m of months) {
+    const prev = rows.length > 0 ? rows[rows.length - 1].cumulative : 0;
+    rows.push({ ...m, label: `${Number(m.period.slice(5))}月`, cumulative: prev + m.balance });
+  }
+  // 累積結餘的面積在 0 以上用收入色、以下用支出色:漸層在 0 的位置切換(offset = 0 在圖上由上往下的比例)
+  const cumMax = Math.max(0, ...rows.map((r) => r.cumulative));
+  const cumMin = Math.min(0, ...rows.map((r) => r.cumulative));
+  const zeroOffset = cumMax === cumMin ? 1 : cumMax / (cumMax - cumMin);
+  const modeInfo = CHART_MODES.find((m) => m.value === chartMode)!;
+  const chartTitle = (
+    <>
+      <ChartBarIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
+      {year} {modeInfo.title}
+      {isFullYear ? "" : `(${rangeLabel})`}
+    </>
+  );
+  const selectRow = (index: number | string | null | undefined) => {
+    const row = index == null ? undefined : rows[Number(index)];
+    if (row) onSelectMonth(row.period);
+  };
 
   const cardTotals = new Map<string, number>();
   for (const m of months) {
@@ -259,6 +302,10 @@ export default function YearOverview({
       {/* 切換年份時先保留上一年的畫面(變淡),新資料回來再換掉,避免整塊閃掉 */}
       <div className={`flex flex-col gap-6 transition-opacity ${loading ? "opacity-60" : ""}`}>
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          {/* 手機版圖表標題列放不下標題(圖例、切換鈕已經佔滿),改放在四格統計上面 */}
+          <h2 className="mb-3 flex items-center gap-1.5 font-medium text-zinc-900 sm:hidden dark:text-zinc-50">
+            {chartTitle}
+          </h2>
           <div className="mb-4 grid grid-cols-2 gap-4 text-center sm:grid-cols-4">
             <Stat label="年收入" value={money(income)} Icon={ArrowUpCircleIcon} note={<SharedNote amount={sharedIncome} />} />
             <Stat label="年支出" value={money(expense)} Icon={ArrowDownCircleIcon} note={<SharedNote amount={sharedExpense} />} />
@@ -276,26 +323,76 @@ export default function YearOverview({
           </div>
 
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="flex items-center gap-1.5 font-medium text-zinc-900 dark:text-zinc-50">
-              <ChartBarIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
-              {year} 每月收支{isFullYear ? "" : `(${rangeLabel})`}
+            {/* 手機版標題放在年度統計上面(見上方),這裡只在 sm 以上顯示 */}
+            <h2 className="hidden items-center gap-1.5 font-medium text-zinc-900 sm:flex dark:text-zinc-50">
+              {chartTitle}
             </h2>
             <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: incomeColor }} />
-                收入
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: expenseColor }} />
-                支出
-              </span>
+              {chartMode === "flow" ? (
+                <>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: incomeColor }} />
+                    收入
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: expenseColor }} />
+                    支出
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: incomeColor }} />
+                    結餘
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: expenseColor }} />
+                    赤字
+                  </span>
+                </>
+              )}
+              <div role="group" aria-label="圖表檢視" className="flex rounded-md border border-zinc-300 p-0.5 dark:border-zinc-700">
+                {CHART_MODES.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => setChartMode(m.value)}
+                    aria-pressed={chartMode === m.value}
+                    className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                      chartMode === m.value
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
               {/* 跟下方「支出分項」標題列的共享按鈕是同一個開關 */}
               <SharedToggleButton on={includeShared} onToggle={() => setIncludeShared((prev) => !prev)} />
             </div>
           </div>
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={rows} margin={{ top: 16, right: 16, left: 0, bottom: 0 }} barGap={2}>
+              <ComposedChart
+                data={rows}
+                margin={{ top: 16, right: 16, left: 0, bottom: 0 }}
+                barGap={2}
+                onClick={chartMode === "cumulative" ? (state) => selectRow(state?.activeTooltipIndex) : undefined}
+                style={chartMode === "cumulative" ? { cursor: "pointer" } : undefined}
+              >
+                <defs>
+                  <linearGradient id="year-cumulative-stroke" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset={zeroOffset} stopColor={incomeColor} />
+                    <stop offset={zeroOffset} stopColor={expenseColor} />
+                  </linearGradient>
+                  <linearGradient id="year-cumulative-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset={0} stopColor={incomeColor} stopOpacity={0.3} />
+                    <stop offset={zeroOffset} stopColor={incomeColor} stopOpacity={0.05} />
+                    <stop offset={zeroOffset} stopColor={expenseColor} stopOpacity={0.05} />
+                    <stop offset={1} stopColor={expenseColor} stopOpacity={0.3} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="1 0" stroke={gridColor} vertical={false} />
                 <XAxis
                   dataKey="label"
@@ -306,37 +403,86 @@ export default function YearOverview({
                 />
                 <YAxis
                   tick={{ fill: tickColor, fontSize: 12 }}
+                  tickCount={6}
                   axisLine={false}
                   tickLine={false}
                   tickFormatter={(value: number) => value.toLocaleString()}
                 />
                 <Tooltip
-                  cursor={{ fill: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" }}
-                  content={(props) => <MonthTooltip {...props} isDark={isDark} gridColor={gridColor} />}
+                  cursor={
+                    chartMode === "cumulative"
+                      ? { stroke: tickColor, strokeDasharray: "3 3" }
+                      : { fill: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" }
+                  }
+                  content={(props) => <MonthTooltip {...props} isDark={isDark} gridColor={gridColor} mode={chartMode} />}
                 />
-                <Bar
-                  dataKey="income"
-                  name="收入"
-                  fill={incomeColor}
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={20}
-                  cursor="pointer"
-                  onClick={(_, index) => onSelectMonth(rows[index].period)}
-                />
-                <Bar
-                  dataKey="expense"
-                  name="支出"
-                  fill={expenseColor}
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={20}
-                  cursor="pointer"
-                  onClick={(_, index) => onSelectMonth(rows[index].period)}
-                />
-              </BarChart>
+                {chartMode !== "flow" && <ReferenceLine y={0} stroke={tickColor} />}
+                {chartMode === "flow" && (
+                  <Bar
+                    dataKey="income"
+                    name="收入"
+                    fill={incomeColor}
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={20}
+                    cursor="pointer"
+                    onClick={(_, index) => selectRow(index)}
+                  />
+                )}
+                {chartMode === "flow" && (
+                  <Bar
+                    dataKey="expense"
+                    name="支出"
+                    fill={expenseColor}
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={20}
+                    cursor="pointer"
+                    onClick={(_, index) => selectRow(index)}
+                  />
+                )}
+                {chartMode === "balance" && (
+                  // 負數長條的高度是負的,recharts 會把 radius 的前兩個角放在遠離 0 的那端,正負都是外側圓角
+                  <Bar
+                    dataKey="balance"
+                    name="結餘"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={28}
+                    cursor="pointer"
+                    onClick={(_, index) => selectRow(index)}
+                  >
+                    {rows.map((r) => (
+                      <Cell key={r.period} fill={r.balance < 0 ? expenseColor : incomeColor} />
+                    ))}
+                  </Bar>
+                )}
+                {chartMode === "cumulative" && (
+                  <Area
+                    // 用直線連接:平滑曲線在正負交界附近會畫出不存在的數值
+                    type="linear"
+                    dataKey="cumulative"
+                    name="累積結餘"
+                    stroke="url(#year-cumulative-stroke)"
+                    strokeWidth={2}
+                    fill="url(#year-cumulative-fill)"
+                    baseValue={0}
+                    dot={(props: { cx?: number; cy?: number; index?: number }) => (
+                      <circle
+                        key={props.index}
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={3}
+                        fill={(rows[props.index ?? 0]?.cumulative ?? 0) < 0 ? expenseColor : incomeColor}
+                      />
+                    )}
+                    activeDot={{ r: 5 }}
+                  />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
           <div className="mt-2 flex items-center justify-between gap-3">
-            <p className="text-xs text-zinc-400 dark:text-zinc-500">點長條可切到該月</p>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              {chartMode === "cumulative" ? "點圖表上的月份可切到該月" : "點長條可切到該月"}
+            </p>
             <button
               type="button"
               onClick={() => setShowTable(true)}

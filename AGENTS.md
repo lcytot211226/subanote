@@ -1,6 +1,6 @@
 <!-- BEGIN:nextjs-agent-rules -->
 
-# This is NOT the Next.js you know
+## This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
@@ -333,6 +333,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `GET /api/transactions` | 支援 `?type=&billingPeriod=&category=&card=` 篩選;查 `category=credit_card` 時會一併帶出 `installment`(分期本質上也是刷卡)。**讀取前一律先呼叫 `generateDueSubscriptionTransactions()` 補生成到期的訂閱交易**,確保 `/income`、`/expense`、`/overview` 永遠看得到最新結果 |
 | `POST /api/transactions` | 建立單筆交易(現金/信用卡單筆);信用卡單筆支出可帶 `pointsDiscount`(0 ~ amount,0/空值不存);自動用 `calculateBillingPeriod()` 算出 `billingPeriod` 並存入。信用卡 / 分期交易若這張卡在歸屬月份已對帳(`reconciled` / `paid`),且沒帶 `confirmReconciled: true`,回 `409 + reconciled: [{ period, status }]` 不新增(`lib/reconciledConflict.ts`),前端 `TransactionForm` 跳「帳單已對帳」確認,確認後帶 `confirmReconciled` 重送;編輯不檢查 |
 | `GET/PUT/DELETE /api/transactions/[id]` | 更新時沒帶 `pointsDiscount` 沿用原值,帶 `null`/0 或改成非信用卡單筆支出會移除該欄位;分期跟刪除一樣**整組一起改**:日期、入帳狀態、卡片、項目、分類套用到同一組每一期(改某期日期 = 整組依期數前後推;切換入帳狀態 = 整組往後 / 往前推一個月;日期都從同一個「幾號」重算,短月夾到月底不漂移,`lib/installmentDates.ts`),金額只改這一期,回應另帶 `groupTransactions`(整組);刪除若該筆有 `installmentGroupId`,會把同一組所有期數一起刪除 |
+| `GET /api/transactions/search` | `?q=&from=YYYY-MM&to=YYYY-MM`,`/search` 用:品名包含任一關鍵字(子字串、不分大小寫;`q` 用半形 / 全形逗號或頓號分隔,最多 10 個,`lib/searchKeywords.ts` 的 `parseKeywords()`,與 `/income`、`/expense` 的前端搜尋共用;關鍵字跳脫後組成 `$regex`)且 `billingPeriod` 落在區間內(含頭尾,最長 10 年)的收支,依日期新到舊,最多 1000 筆(超過帶 `truncated: true`)。查詢前同樣先補生成到期的訂閱交易 |
 | `POST /api/transactions/installment` | `{ item, date, card, totalAmount, totalNumber, posted? }`,一次生成整組分期交易,共用同一個 `installmentGroupId`;金額除不盡的餘數放在第一期,其餘各期平分。`posted: false`(結帳日當下未入帳,簽帳金融卡忽略)時第一期從下個月的同一天開始(各期日期都往後推一個月,各期存 `posted: false`;日期已反映遞延,`calculateBillingPeriod` 對分期不再因 `posted` 重複延)。任何一期落在這張卡已對帳的月份時,同單筆交易回 409 等使用者確認(`confirmReconciled`) |
 
 ### 訂閱 `/api/subscriptions`
@@ -415,18 +416,19 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
 | `/income` | 收入總覽(列表 + 篩選) |
 | `/expense` | 支出總覽(列表 + 篩選),含信用卡分期與信用卡對帳標記。右下角浮動「+」的新增視窗上方可切換「支出 / 訂閱」(`TransactionsClient` 的 `addAlternative`);篩選列右邊的「訂閱」按鈕(帶數量)打開所有訂閱清單(`components/SubscriptionsClient.tsx`):上方每月訂閱合計,各訂閱依下次扣款日排序,左邊是分類圖示,中間是名稱與「每月 D 號 · 付款方式」,右邊是金額與「下次 M/D(N 天後)」,點一筆打開編輯,刪除在編輯表單按鈕列最右邊;清單底部也有「新增訂閱」。訂閱清單由 `ExpenseClient` 持有,異動後重抓訂閱並讓交易列表重新讀取 |
 | `/overview` | 主要整合頁面,詳見下方說明 |
-| `/cards` | 信用卡管理(`components/CardForm.tsx`):「我的卡片」標題列右邊「+ 新增」開 dialog 新增;卡片以兩欄卡片列出(簽帳金融卡紫色圖示),點整張卡片開 dialog 編輯,刪除在 dialog 按鈕列最右邊。新增時可勾選「簽帳金融卡」,勾選後隱藏結帳日 / 繳款日;編輯時鎖住無法更改。dialog 裡的「圖示」可自訂 16 × 16 像素圖示(`components/PixelEditor.tsx`):8 個模板(`PATTERN_TEMPLATES`,套用 = 把像素複製進來,之後照樣可改,不記得來自哪個模板)、16 色調色盤(`PALETTE`,色號 0 透明)、畫筆 / 橡皮擦 / 油漆桶 / 滴管、復原 / 重做、清空,支援拖曳連續畫(手機 `touch-action: none`),旁邊有實際大小預覽;「使用預設」移除圖示。有圖示的卡片在 `/cards` 列表、`/overview` 月 / 年檢視的信用卡格子、下拉選單,以及收支列表每筆交易(在收支列表放在付款方式前面、取代卡片名稱,名稱放 title 與 sr-only)都顯示這個圖示(`components/CardIcon.tsx`:`PixelIcon` 用 SVG + `crispEdges` 畫,同色連續格子合併成一個 rect;`CardIcon` 沒圖示時退回預設圖示,簽帳金融卡紫色)。下方是**回饋試算**(`components/RewardCalculator.tsx`):標題列「+ 新增」開 dialog 建立方案(名稱 + 幾項「回饋率 % + 取底 / 四捨五入」);輸入消費金額(預設 200)後,方案清單由高到低列出回饋額(顏色點 + 名稱,最高的標「最高」;規則不顯示在外面,點一列進編輯才看得到,也在那裡刪除),下面 Recharts 折線圖(`stepAfter`,取整造成的階梯才畫得出來)畫 0 ~ 該金額的 110% 各方案的回饋比較,輸入的金額位置有一條虛線參考線(標金額),tooltip 列出該金額各方案回饋 |
-| `/settings` | 個人設定(`components/SettingsClient.tsx`):最上方顯示目前登入的帳號 email(來自 `GET /api/auth/me`),下面是分組的列表式選單,點每一列在 dialog 裡打開對應內容——月結算日(`specialDate`)、外觀(淺色 / 深色 / 跟隨系統,`ThemeSettings.tsx`)、加到手機主畫面教學(`AddToHomeScreenGuide.tsx`,純說明,不做 PWA)、修改密碼、刪除帳號;另有「管理員後台」連結(僅 `isAdmin`)、「登出」與「登出所有裝置」(確認後呼叫 `POST /api/auth/logout-all`);「刪除帳號」自成一組放在最下面,跟登出等操作分開 |
+| `/search` | 依品名搜尋收支(`components/SearchClient.tsx`,入口是導覽列右邊的放大鏡,手機、桌面都有):輸入關鍵字(逗號分隔多個,符合任一)按「搜尋」才打 `GET /api/transactions/search`;區間用兩個 `MonthPicker`(從 / 到,依 `billingPeriod`),預設近一年,另有「近一年 / 今年 / 去年 / 近三年」快速選,搜尋過後改區間會自動重搜。結果上方是支出 / 收入各幾筆與合計,可用「全部 / 支出 / 收入」在前端切換,列表依歸屬月份分組(每組標該月支出 / 收入小計),品名裡符合的字加底色;點一筆直接在這頁開編輯 dialog(`TransactionForm`,卡片清單由 server component 查好傳入,刪除在按鈕列最右邊,分期同樣整組改 / 整組刪),存檔後用 API 回應就地更新結果——歸屬月份跑出區間或改名後不再符合關鍵字的會從結果拿掉;dialog 底部另有連結可到該月的 `/expense` 或 `/income`(帶 `?period=&q=<品名>`)。搜尋條件寫回網址(`?q=&from=&to=`,`history.replaceState`),按上一頁回來會自動重新搜尋 |
+| `/cards` | 信用卡管理(`components/CardForm.tsx`;手機版標題上方有「‹ 設定」返回鈕,因為是從設定頁進來的):「我的卡片」標題列右邊「+ 新增」開 dialog 新增;卡片以兩欄卡片列出(簽帳金融卡紫色圖示),點整張卡片開 dialog 編輯,刪除在 dialog 按鈕列最右邊。新增時可勾選「簽帳金融卡」,勾選後隱藏結帳日 / 繳款日;編輯時鎖住無法更改。dialog 裡的「圖示」可自訂 16 × 16 像素圖示(`components/PixelEditor.tsx`):8 個模板(`PATTERN_TEMPLATES`,套用 = 把像素複製進來,之後照樣可改,不記得來自哪個模板)、16 色調色盤(`PALETTE`,色號 0 透明)、畫筆 / 橡皮擦 / 油漆桶 / 滴管、復原 / 重做、清空,支援拖曳連續畫(手機 `touch-action: none`),旁邊有實際大小預覽;「使用預設」移除圖示。有圖示的卡片在 `/cards` 列表、`/overview` 月 / 年檢視的信用卡格子、下拉選單,以及收支列表每筆交易(在收支列表放在付款方式前面、取代卡片名稱,名稱放 title 與 sr-only)都顯示這個圖示(`components/CardIcon.tsx`:`PixelIcon` 用 SVG + `crispEdges` 畫,同色連續格子合併成一個 rect;`CardIcon` 沒圖示時退回預設圖示,簽帳金融卡紫色)。下方是**回饋試算**(`components/RewardCalculator.tsx`):標題列「+ 新增」開 dialog 建立方案(名稱 + 幾項「回饋率 % + 取底 / 四捨五入」);輸入消費金額(預設 200)後,方案清單由高到低列出回饋額(顏色點 + 名稱,最高的標「最高」;規則不顯示在外面,點一列進編輯才看得到,也在那裡刪除),下面 Recharts 折線圖(`stepAfter`,取整造成的階梯才畫得出來)畫 0 ~ 該金額的 110% 各方案的回饋比較,輸入的金額位置有一條虛線參考線(標金額),tooltip 列出該金額各方案回饋 |
+| `/settings` | 個人設定(`components/SettingsClient.tsx`):最上方顯示目前登入的帳號 email(來自 `GET /api/auth/me`),下面是分組的列表式選單,點每一列在 dialog 裡打開對應內容——月結算日(`specialDate`)、外觀(淺色 / 深色 / 跟隨系統,`ThemeSettings.tsx`)、加到手機主畫面教學(`AddToHomeScreenGuide.tsx`,純說明,不做 PWA)、修改密碼、刪除帳號;另有「管理員後台」連結(僅 `isAdmin`)、「登出」與「登出所有裝置」(確認後呼叫 `POST /api/auth/logout-all`);「刪除帳號」自成一組放在最下面,跟登出等操作分開。手機版在帳號下面多一組「信用卡」連到 `/cards`(底部分頁列的位置給了搜尋;桌面版導覽列有信用卡,不顯示) |
 | `/admin`、`/admin/notification` | 僅 `ADMIN_EMAIL` 可進入,發布/編輯/刪除系統公告 |
 | `/admin/users` | 僅 `ADMIN_EMAIL` 可進入。上方兩張統計卡(`components/AdminStatsSection.tsx`,資料由 server component 直接呼叫 `lib/getAdminStats.ts`):**近 30 天加入人數**(依 `User.createDate`)與**近 7 天新增交易數**(依 `Transaction.createdAt`,含訂閱自動生成與分期各期),一律以台灣時間切日;每張卡附每日新增數長條圖(x 軸 M/D,窗口內沒資料的日子補 0),以及跟昨天窗口比的升降 = 今天的數量 − 昨天窗口第一天(今天往前 30 / 7 天那天)的數量。下方是使用者清單(`components/AdminUsersClient.tsx`,打 `GET /api/admin/users` 分頁 + email 搜尋) |
 
-> 導覽列(`components/Navbar.tsx`):左邊是 `components/Logo.tsx` 的 Subanote 品牌字(SVG,Pacifico 手寫體 + 品牌色漸層),中間是頁面選單(桌面版用 `grid-cols-[1fr_auto_1fr]` 讓選單真正置中),右邊是通知鈴鐺 / 設定 / 深淺色快速切換。手機版沒有漢堡選單:上方只留 Logo 與通知 / 深淺色,頁面選單與設定(收入 / 支出 / **總覽(正中間)** / 信用卡 / 設定(最右邊),各帶圖示)移到固定在底部的分頁列(`components/BottomNav.tsx`,`NAV_LINKS` 與 Navbar 共用),方便單手點;底部分頁列前有同高的佔位避免擋住內容,浮動「+」按鈕與 toast 在手機上也往上移到分頁列上方(`viewport` 設 `viewportFit: "cover"`,用 `env(safe-area-inset-bottom)` 避開 iPhone home bar)。管理員入口與登出不在導覽列,在 `/settings`。登入、註冊、驗證、忘記密碼頁與未登入首頁的標題也都用同一個 Logo。
+> 導覽列(`components/Navbar.tsx`):左邊是 `components/Logo.tsx` 的 Subanote 品牌字(SVG,Pacifico 手寫體 + 品牌色漸層),中間是頁面選單(桌面版用 `grid-cols-[1fr_auto_1fr]` 讓選單真正置中),右邊是搜尋(`/search`)/ 通知鈴鐺 / 設定 / 深淺色快速切換。手機版沒有漢堡選單:上方只留 Logo 與通知 / 深淺色,頁面選單、搜尋與設定(收入 / 支出 / **總覽(正中間)** / 搜尋(放大鏡)/ 設定(最右邊),各帶圖示)移到固定在底部的分頁列(`components/BottomNav.tsx`,`NAV_LINKS` 與 Navbar 共用);手機版的信用卡不在分頁列,改從 `/settings` 的「信用卡」進入,在 `/cards` 時設定分頁亮起,方便單手點;底部分頁列前有同高的佔位避免擋住內容,浮動「+」按鈕與 toast 在手機上也往上移到分頁列上方(`viewport` 設 `viewportFit: "cover"`,用 `env(safe-area-inset-bottom)` 避開 iPhone home bar)。管理員入口與登出不在導覽列,在 `/settings`。登入、註冊、驗證、忘記密碼頁與未登入首頁的標題也都用同一個 Logo。
 
 > `/income`、`/expense` 共用 `components/TransactionsClient.tsx`:只依月份向 `GET /api/transactions` 抓當月全部資料,付款方式 / 信用卡篩選都在前端過濾(選「信用卡」一併包含分期,規則同 API;收入一律是現金,所以 `/income` 不顯示付款方式篩選)。方便其他頁面導過來時直接套用篩選,月份與篩選可以用網址 query 帶入初始值(只在進頁面時讀一次,之後操作不會回寫網址):`?period=YYYY-MM&category=cash|credit_card|installment&card=<cardId>&q=<關鍵字>`(不合法的值忽略;只帶 `card` 視為信用卡篩選;`/income` 只吃 `period`、`kind` 與 `q`),收入、支出都有分類篩選(`components/KindPicker.tsx` 的 `KindFilter`;`?kind=` 也可帶入),交易 / 訂閱表單選分類用同檔的 `KindPicker`(支出 8 個圖示格子,手機 4 欄、桌面一排;收入 4 個一排),每筆交易名稱前面顯示分類圖示(`components/KindIcon.tsx`,SVG + 各分類一個顏色的圓底);切換篩選不會重新打 API;新增交易是右下角的浮動「+」按鈕(樣式同 `/overview` 手機版的快速記帳,但桌面版也顯示,列表底部留白避免被擋住;寬螢幕(`lg` 以上,`lib/useMediaQuery.ts`)新增與編輯都不開 dialog,改在列表右邊顯示固定寬度的面板(sticky,`aside[data-add-panel]`);頁面容器用 `has-[[data-add-panel]]` 從 `max-w-4xl` 加寬一個面板的寬度,列表維持原本寬度(螢幕不夠寬時才會縮),開著面板時隱藏浮動「+」,正在編輯的那筆交易外框加深,點另一筆直接換成編輯那筆;窄螢幕照舊用置中 dialog。`TransactionForm` / `SubscriptionForm` / `KindPicker` 的欄數用 container query(`@container` + `@xl:` 等)依表單本身寬度決定,放進窄面板自動變單欄,日期完整顯示,表單預設值沿用目前的篩選——付款方式、信用卡(只篩卡片時視為信用卡單筆)、分類,`TransactionForm` 的 `defaults`);列表上沒有編輯 / 刪除按鈕,點整筆交易(或鍵盤 Enter / 空白鍵)就打開編輯 dialog,刪除按鈕放在 dialog 按鈕列最右邊(`TransactionForm` 的 `onDelete`,仍會跳刪除確認;刪除成功後關閉 dialog);新增 / 編輯 / 刪除交易後也不重抓整個月份,直接用 API 回應更新本地列表(只保留 `billingPeriod` 是目前月份的交易,例如分期的其他期數、改日期跑到別的月份的會被拿掉;刪除分期依 `installmentGroupId` 把同組的其他期一起移除,編輯分期則用 API 回傳的整組替換;新增時 API 回傳的 `card` 只是 id,由 `TransactionForm` 用手上的卡片清單補成完整卡片),只有訂閱新增/編輯/刪除(會補生成交易)才重新讀取;另有一列前端本地的名稱搜尋(可用半形/全形逗號或頓號分隔多個關鍵字,符合任一即顯示,總額跟著只算符合的項目),依日期或金額排序(旁邊共用一個方向箭頭切換高到低 / 低到高,再點一次目前已選的欄位也會反轉;日期相同時再依 `createdAt` 同方向排序,金額相同時依日期、`createdAt` 新到舊),以及列表 / 2 欄 / 3 欄的顯示方式切換(排序與顯示方式都記在 localStorage;手機版一律單欄,不顯示顯示方式切換)。
 
 ### `/overview` 頁面配置(由上到下)
 
-1. **月份選擇器**:切換不同月份(對應 `billingPeriod` / Utility 的 year+month)。右邊是「月 / 年」切換鈕:切到「年」改顯示年度檢視(`components/YearOverview.tsx`,打 `GET /api/overview/year`,每次從原始資料即時算),取代下面所有月度區塊與快速記帳按鈕——年份切換、統計月份區間(`components/MonthRangePicker.tsx`:按鈕(跟年份按鈕一樣是灰外框,全年或自訂區間只靠文字區分)點開 12 個月格子,第一下選起始月、第二下選結束月,另有「全年」重設;預設 1–12 月,選的區間只對當年有效,換年份回到 1–12 月;用來排除還沒開始記帳或這個月還沒記完的月份,以下所有數字、圖表、明細都只算區間內的月份,純前端過濾不重打 API)、年收入 / 年支出 / 年結餘 / 月平均支出(只除以有收支的月份)、每月收入 vs 支出長條圖(收入綠、支出紅;紅綠對色盲分辨度偏低,所以收入固定在每組左邊並搭配圖例與 tooltip 文字)、「明細表」按鈕(用 dialog 顯示每月收支結餘表與合計列,點月份切回月檢視)、各信用卡刷卡金額(標題右邊顯示所有卡合計;已刪除但當年有金額的卡顯示「已刪除的信用卡」),下面接支出分項(現金 / 分期 / 訂閱 / 房租水電),順序同月檢視。共享開關(`SharedToggleButton`,計入時淡靛藍色)在圖表圖例最右邊與「支出分項」標題列最右邊各一個,是同一個 state(預設計入,不跟月檢視連動):計入時每個月的共享收入加進收入、共享支出加進支出,各分項也加上共享的部分,上方年度數字、長條圖、月份表都跟著變;年收入 / 年支出 / 年結餘與各分項底下用 `components/SharedNote.tsx`(月檢視共用)標出其中共享多少(月平均支出不標)。原本的「共享收入 / 支出」格子已移除。點長條或明細表的某個月份會切回月檢視並跳到該月。檢視狀態不記憶,進頁面一律是月檢視;年檢視的年份是獨立 state,切年份不會觸發月度資料重新載入
+1. **月份選擇器**:切換不同月份(對應 `billingPeriod` / Utility 的 year+month)。右邊是「月 / 年」切換鈕:切到「年」改顯示年度檢視(`components/YearOverview.tsx`,打 `GET /api/overview/year`,每次從原始資料即時算),取代下面所有月度區塊與快速記帳按鈕——年份切換、統計月份區間(`components/MonthRangePicker.tsx`:按鈕(跟年份按鈕一樣是灰外框,全年或自訂區間只靠文字區分)點開 12 個月格子,第一下選起始月、第二下選結束月,另有「全年」重設;預設 1–12 月,選的區間只對當年有效,換年份回到 1–12 月;用來排除還沒開始記帳或這個月還沒記完的月份,以下所有數字、圖表、明細都只算區間內的月份,純前端過濾不重打 API)、年收入 / 年支出 / 年結餘 / 月平均支出(只除以有收支的月份)、每月圖表(標題列右邊「收支 / 結餘 / 累積」切換,預設收支,不記憶):**收支**是收入 vs 支出長條圖(收入綠、支出紅,收入固定在每組左邊);**結餘**是每月結餘長條圖,以 0 為基準正數綠色往上、負數紅色往下;**累積**是從統計區間第一個月開始累加的結餘折線 + 面積圖(直線連接,0 以上綠、以下紅,最後一點等於年結餘);三種都跟著共享開關與月份區間,點長條 / 點圖表上的月份切回該月、「明細表」按鈕(用 dialog 顯示每月收支結餘表與合計列,點月份切回月檢視)、各信用卡刷卡金額(標題右邊顯示所有卡合計;已刪除但當年有金額的卡顯示「已刪除的信用卡」),下面接支出分項(現金 / 分期 / 訂閱 / 房租水電),順序同月檢視。共享開關(`SharedToggleButton`,計入時淡靛藍色)在圖表圖例最右邊與「支出分項」標題列最右邊各一個,是同一個 state(預設計入,不跟月檢視連動):計入時每個月的共享收入加進收入、共享支出加進支出,各分項也加上共享的部分,上方年度數字、長條圖、月份表都跟著變;年收入 / 年支出 / 年結餘與各分項底下用 `components/SharedNote.tsx`(月檢視共用)標出其中共享多少(月平均支出不標)。原本的「共享收入 / 支出」格子已移除。點長條或明細表的某個月份會切回月檢視並跳到該月。檢視狀態不記憶,進頁面一律是月檢視;年檢視的年份是獨立 state,切年份不會觸發月度資料重新載入
 2. **Overview 圖表**:用 Recharts 顯示該月份的收入 vs 支出圖表,呈現該月 `billingPeriod` 底下所有交易的收支狀況
    - **分類統計**(`components/CategoryBreakdown.tsx`,緊接在每日支出圖表下方):依交易分類加總本月收入 / 支出,每邊一個簡單圓環(中間是總額)+ 由多到少的橫條列表(分類圖示、名稱、比例條、金額、百分比),點一列導到 `/expense` 或 `/income` 並帶 `?period=&kind=`。手機和桌面都用右上角「支出 / 收入」切換(預設支出),一次只顯示一邊,圓環在桌面放大到 160px 並跟列表並排,手機改成圓環在上、列表在下;列表用 subgrid 對齊各欄,每根比例條底條一樣長;兩邊疊在同一格(沒選的 `invisible` 仍佔位),高度一律取較高的那邊,切換時卡片不會伸縮。只統計交易(前端用已抓回的當月交易現場算,含已納入的共享交易),不含房租水電;共享交易在長條裡另外用淡靛藍色接在自己的分類色後面(圓環不分開,滑鼠移到長條上顯示自己 / 共享各多少),有共享時底下說明列會多一個顏色圖例
 3. **每日可花預算**:若使用者在 `/settings` 設定了月結算日(`specialDate`),顯示距離下次結算日還有幾天,以及「本月結餘 ÷ 剩餘天數」算出的每日可花預算(`lib/calculateDailyBudget.ts`);沒設定則改顯示提示(`components/SpecialDatePrompt.tsx`),說明這個功能並可直接在此輸入日期設定(`PATCH /api/auth/me`),設定後立刻顯示預算;右上角叉叉可關閉提示,記在 localStorage 的 `special-date-prompt-dismissed`,之後在這個瀏覽器不再顯示(仍可到 `/settings` 設定)
@@ -466,7 +468,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   page.tsx                        // 未登入介紹頁(demo 資料)
   manifest.ts                     // Web App Manifest(非 PWA,只是提供 icon/主題色 metadata)
   /login, /register, /verify-email, /forgot-password  // 各自 page.tsx
-  /income, /expense, /overview, /cards, /settings      // 各自 page.tsx
+  /income, /expense, /overview, /search, /cards, /settings  // 各自 page.tsx
   /admin
     layout.tsx                    // 檢查 ADMIN_EMAIL,非管理員導回 /overview
     page.tsx
@@ -475,7 +477,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   /api
     /auth/{register,login,logout,logout-all,me,verify-email,resend-code,forgot-password,reset-password,change-password,delete-account}/route.ts
     /cards/route.ts, /cards/[id]/route.ts
-    /transactions/route.ts, /transactions/[id]/route.ts, /transactions/installment/route.ts
+    /transactions/route.ts, /transactions/[id]/route.ts, /transactions/installment/route.ts, /transactions/search/route.ts
     /subscriptions/route.ts, /subscriptions/[id]/route.ts
     /utilities/route.ts, /utilities/[id]/route.ts
     /card-reconciliations/route.ts
@@ -509,6 +511,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   expenseKind.ts, incomeKind.ts, transactionKind.ts // 交易分類(支出 / 收入兩組 + 共用邏輯)
   useDismiss.ts                   // 彈出面板點外面 / Esc 關閉
   cardsCache.ts                   // 快速記帳用的信用卡清單 localStorage 快取
+  searchKeywords.ts               // 品名搜尋:逗號分隔關鍵字、正規表示式跳脫
   installmentDates.ts             // 分期各期日期(錨定同一個「幾號」+ 未入帳整組推一個月)
   addMonths.ts, period.ts, usePeriod.ts, demoData.ts
   models/
@@ -520,7 +523,7 @@ EMAIL_KEY=<Resend API Key,用於寄送註冊 / 忘記密碼的驗證碼信件>
   CardForm.tsx, CardIcon.tsx, PixelEditor.tsx, UtilityInlineEditor.tsx
   SubscriptionForm.tsx, SubscriptionsClient.tsx
   RewardCalculator.tsx, CategoryBreakdown.tsx, KindIcon.tsx, KindPicker.tsx, Dropdown.tsx, dropdownOptions.tsx, DatePicker.tsx, BottomNav.tsx,
-  SpecialDatePrompt.tsx, YearOverview.tsx, MonthRangePicker.tsx
+  SpecialDatePrompt.tsx, YearOverview.tsx, MonthRangePicker.tsx, SearchClient.tsx
   SharedItemsSection.tsx, SharedNote.tsx, Switch.tsx, SharedToggleButton.tsx, QuickAddButton.tsx, RoundedAmount.tsx, AddToHomeScreenGuide.tsx
   NotificationBell.tsx, PublicNotifications.tsx, AdminNotificationClient.tsx, AdminStatsSection.tsx, AdminUsersClient.tsx, Logo.tsx, ThemeSettings.tsx
   SettingsClient.tsx, SpecialDateForm.tsx, ChangePasswordForm.tsx, DeleteAccountForm.tsx

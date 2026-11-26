@@ -21,6 +21,7 @@ import { useMediaQuery } from "@/lib/useMediaQuery";
 import { netAmount } from "@/lib/pointsDiscount";
 import { isKindFor, kindOf, type TransactionKind } from "@/lib/transactionKind";
 import KindIcon from "./KindIcon";
+import { parseKeywords } from "@/lib/searchKeywords";
 import { PixelIcon } from "./CardIcon";
 import { KindFilter } from "./KindPicker";
 import Dropdown from "./Dropdown";
@@ -260,10 +261,7 @@ export default function TransactionsClient({
   });
   // 名稱搜尋只在前端過濾已載入的當月資料,不另外打 API。
   // 可用逗號(半形/全形/頓號)分隔多個關鍵字,名稱符合任一個就顯示。
-  const keywords = search
-    .split(/[,，、]/)
-    .map((k) => k.trim().toLowerCase())
-    .filter(Boolean);
+  const keywords = parseKeywords(search);
   const keyword = keywords.length > 0;
   const filteredTransactions = keyword
     ? categoryFiltered.filter((t) => {

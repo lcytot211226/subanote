@@ -15,6 +15,7 @@ import {
   ArrowRightStartOnRectangleIcon,
   CalendarDaysIcon,
   ChevronRightIcon,
+  CreditCardIcon,
   DevicePhoneMobileIcon,
   LockClosedIcon,
   ShieldCheckIcon,
@@ -142,6 +143,17 @@ export default function SettingsClient() {
           <RowContent Icon={UserCircleIcon} title="目前登入帳號" description={email ?? "載入中..."} chevron={false} />
         </li>
       </Group>
+
+      {/* 手機版底部分頁列沒有「信用卡」(位置給了搜尋),入口放在這裡;桌面版導覽列還有,不重複顯示 */}
+      <div className="sm:hidden">
+        <Group>
+          <li>
+            <Link href="/cards" className={ROW_CLASS}>
+              <RowContent Icon={CreditCardIcon} title="信用卡" description="管理卡片、回饋試算" />
+            </Link>
+          </li>
+        </Group>
+      </div>
 
       <Group>
         {dialogRow("specialDate", CalendarDaysIcon, "總覽頁依此算出每日可花預算")}
