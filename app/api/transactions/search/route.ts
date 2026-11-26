@@ -17,7 +17,8 @@ function monthIndex(period: string) {
 
 /**
  * 依品名搜尋交易:`?q=關鍵字1,關鍵字2&from=YYYY-MM&to=YYYY-MM`。
- * 關鍵字是品名的子字串就算符合(不分大小寫,任一個符合即可);月份區間比對 billingPeriod(含頭尾)。
+ * 關鍵字是品名的子字串就算符合(不分大小寫,任一個符合即可);月份區間比對消費日期 date(含頭尾月份),
+ * 不是歸屬月份 billingPeriod——搜尋時想的是「什麼時候買的」,不是哪個月扣款。
  */
 export async function GET(request: Request) {
   const auth = await requireAuth();
@@ -47,9 +48,12 @@ export async function GET(request: Request) {
   // 跟交易列表一樣先補生成到期的訂閱,搜尋結果才會包含最新的訂閱扣款
   await generateDueSubscriptionTransactions(auth.userId);
 
+  // 交易日期一律存成當天 UTC 00:00,所以用 UTC 的月初切區間
+  const start = new Date(Date.UTC(Number(from.slice(0, 4)), Number(from.slice(5, 7)) - 1, 1));
+  const end = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 1));
   const filter = {
     user: auth.userId,
-    billingPeriod: { $gte: from, $lte: to },
+    date: { $gte: start, $lt: end },
     item: { $regex: keywords.map(escapeRegExp).join("|"), $options: "i" },
   };
   const transactions = await Transaction.find(filter)

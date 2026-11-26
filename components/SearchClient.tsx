@@ -80,7 +80,7 @@ function Highlighted({ text, keywords }: { text: string; keywords: string[] }) {
 }
 
 /**
- * /search:依品名搜尋一段月份區間(依 billingPeriod,預設近一年)內的所有收支。
+ * /search:依品名搜尋一段月份區間(依消費日期,不是歸屬月份;預設近一年)內的所有收支。
  * 關鍵字是品名的子字串就符合,可用逗號分隔多個(符合任一個)。搜尋條件會寫回網址,
  * 重新整理或從別頁按上一頁回來會回到同樣的搜尋結果。
  * 點一筆結果直接在這裡開編輯 dialog(同 /income、/expense 的 TransactionForm),存檔 / 刪除後就地更新結果。
@@ -152,10 +152,11 @@ export default function SearchClient({ cards }: { cards: CardDTO[] }) {
     if (parseKeywords(initial.q).length > 0) request(initial.q, initial.from, initial.to).then(apply);
   }, [initial, request, apply]);
 
-  /** 編輯後是否還留在結果裡:歸屬月份仍在搜尋區間內、品名仍符合關鍵字 */
+  /** 編輯後是否還留在結果裡:消費月份仍在搜尋區間內、品名仍符合關鍵字 */
   function stillMatches(t: TransactionDTO, r: Result) {
     const name = t.item.toLowerCase();
-    return t.billingPeriod >= r.from && t.billingPeriod <= r.to && parseKeywords(r.query).some((k) => name.includes(k));
+    const month = t.date.slice(0, 7);
+    return month >= r.from && month <= r.to && parseKeywords(r.query).some((k) => name.includes(k));
   }
 
   function updateTransactions(update: (prev: TransactionDTO[], r: Result) => TransactionDTO[]) {
@@ -217,12 +218,13 @@ export default function SearchClient({ cards }: { cards: CardDTO[] }) {
   const expenseCount = all.filter((t) => t.type === "expense").length;
   const incomeCount = all.length - expenseCount;
 
-  // 依歸屬月份分組(結果已經依日期新到舊排好)
+  // 依消費月份分組(結果已經依日期新到舊排好)
   const groups: { period: string; items: TransactionDTO[] }[] = [];
-  for (const t of [...shown].sort((a, b) => b.billingPeriod.localeCompare(a.billingPeriod))) {
+  for (const t of shown) {
+    const month = t.date.slice(0, 7);
     const last = groups[groups.length - 1];
-    if (last?.period === t.billingPeriod) last.items.push(t);
-    else groups.push({ period: t.billingPeriod, items: [t] });
+    if (last?.period === month) last.items.push(t);
+    else groups.push({ period: month, items: [t] });
   }
 
   return (
@@ -249,7 +251,7 @@ export default function SearchClient({ cards }: { cards: CardDTO[] }) {
           </button>
         </div>
         <p className="text-xs text-zinc-400 dark:text-zinc-500">
-          品名包含關鍵字就算符合;多個關鍵字用逗號分隔,符合任一個即列出
+          品名包含關鍵字就算符合;多個關鍵字用逗號分隔,符合任一個即列出;月份依消費日期
         </p>
         {/* 手機上兩個選擇器放不下一排,改成「從 / 到」各一行 */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-zinc-500 dark:text-zinc-400">

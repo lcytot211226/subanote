@@ -42,6 +42,8 @@ const TransactionSchema = new Schema(
 );
 
 TransactionSchema.index({ user: 1, billingPeriod: 1 });
+// /search 依消費日期區間搜尋
+TransactionSchema.index({ user: 1, date: -1 });
 TransactionSchema.index({ user: 1, installmentGroupId: 1 });
 // 後台統計「近 7 天新增交易數」用
 TransactionSchema.index({ createdAt: 1 });
